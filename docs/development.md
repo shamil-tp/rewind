@@ -1,11 +1,7 @@
 # Developing Rewind
 
-Status: **Phase 3.** The Go server stores state in SQLite, supports first-run
-owner setup, sign-in and sign-out, indexes configured music folders at
-startup or on request, serves the authenticated library API, and serves the
-frontend: the music library with search, sorting and paging, a library
-status page with rescan, and a bottom playback bar that streams from the
-server.
+This page is for working on Rewind's code. To install a release on a
+server, see [install.md](install.md).
 
 ## Prerequisites
 
@@ -29,26 +25,9 @@ the PowerShell equivalents shown.
 ## Configuration
 
 Rewind reads environment variables only and **does not load `.env` files
-itself**. All settings are optional:
-
-| Variable | Default | Values |
-| --- | --- | --- |
-| `REWIND_ADDR` | `127.0.0.1:8090` | comma-separated `host:port` list; loopback only unless remote access is enabled (see below) |
-| `REWIND_REMOTE_ACCESS` | `false` | allow LAN or Tailscale IP addresses in `REWIND_ADDR` |
-| `REWIND_LISTEN_ALL_INTERFACES` | `false` | also allow `0.0.0.0` / `[::]` (needs `REWIND_REMOTE_ACCESS=true`) |
-| `REWIND_TRUSTED_HOSTS` | *(empty)* | extra `Host` names accepted, comma-separated, no wildcards |
-| `REWIND_DATA_DIR` | `data` (relative to the working directory) | directory for `rewind.db` and `setup-code`; created with mode 0700 if missing |
-| `REWIND_SESSION_LIFETIME` | `720h` (30 days) | Go duration, `5m` to `8760h` |
-| `REWIND_SESSION_IDLE_TIMEOUT` | `168h` (7 days) | Go duration, at least `5m`; capped at the lifetime |
-| `REWIND_COOKIE_SECURE` | `false` | `true` only when Rewind is served over HTTPS |
-| `REWIND_LIBRARY_ROOTS` | *(empty)* | absolute music folders, separated by `:` (`;` on Windows); see [library.md](library.md) |
-| `REWIND_SCAN_ON_STARTUP` | `true` | scan all library roots in the background at startup |
-| `REWIND_SCAN_WORKERS` | `2` | parallel metadata readers during a scan, 1–8 |
-| `REWIND_API_MAX_PAGE_SIZE` | `200` | largest `limit` accepted by paginated API endpoints, 10–1000 |
-| `REWIND_LOG_LEVEL` | `info` | `debug`, `info`, `warn`, `error` |
-| `REWIND_LOG_FORMAT` | `text` | `text`, `json` |
-| `REWIND_PLUGIN_DIR` | (empty: plugins off) | absolute directory of plugin manifests, outside the data directory and music folders; see [plugins.md](plugins.md) |
-| `REWIND_PLUGINS` | (empty) | comma-separated IDs of plugins to enable; requires `REWIND_PLUGIN_DIR` |
+itself**. All settings are optional; they are listed in
+[configuration.md](configuration.md). `.env.example` contains every setting
+with its default.
 
 Invalid values stop startup with a message naming every problem.
 
@@ -139,8 +118,10 @@ read-only mount):
 
 ```sh
 REWIND_LIBRARY_ROOTS="$HOME/music-sample" go run ./cmd/rewind
-``` There
-is no frontend linter yet; `npm run check` is the frontend's static check.
+```
+
+There is no frontend linter yet; `npm run check` is the frontend's static
+check.
 
 ## Production build
 
@@ -310,6 +291,9 @@ deploys manually over SSH. Shared steps live in `scripts/`:
 | `third-party.sh` | license gate: fails on unreviewed or license-less dependencies; collects notices |
 | `lgpl-sources.sh` | LGPL corresponding-source bundle (go-taglib, TagLib, utfcpp) |
 | `package-release.sh` | release archives and `SHA256SUMS` (run on Linux) |
+| `install.sh` | published installer: install, upgrade, rollback and status on a systemd server ([install.md](install.md)) |
+| `install-test.sh` | end-to-end test of `install.sh` as root on a disposable systemd machine (CI) |
+| `release-check.sh` | all pre-release checks in one run, on Linux ([deployment.md](deployment.md#release-validation)) |
 | `deploy-remote.sh` | server-side half of `deploy.yml` (streamed over SSH, never installed) |
 
 Invoke them with `sh scripts/<name>.sh`. See [deployment.md](deployment.md).

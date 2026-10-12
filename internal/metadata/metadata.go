@@ -16,6 +16,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"unicode/utf8"
@@ -75,6 +76,41 @@ type Metadata struct {
 	Codec       string // e.g. "aac", "alac", "vorbis", "pcm", "mpeg", "flac"
 	Status      Status
 	Error       string // set when Status is StatusError; short and bounded
+}
+
+// UsePrivateTempDir points the process's temporary directory (TMPDIR, or TMP
+// on Windows) at a new directory that only this user can access (mode 0700,
+// unpredictable name), and returns a function that restores the variable and
+// removes the directory. Call it once at startup, before the first Extract.
+//
+// taglib caches its compiled WebAssembly module, which is machine code, in
+// os.TempDir()/go-taglib-wasm. It creates that directory only if it is
+// missing, and runs what it finds there after a CRC check that is not an
+// authenticity check. In a shared /tmp, another local user could create the
+// directory first and plant code for Rewind to run. Inside a private
+// directory the cache is still used, for the lifetime of the process.
+func UsePrivateTempDir() (cleanup func(), err error) {
+	dir, err := os.MkdirTemp("", "rewind-")
+	if err != nil {
+		return nil, fmt.Errorf("creating a private temporary directory: %w", err)
+	}
+	key := "TMPDIR"
+	if runtime.GOOS == "windows" {
+		key = "TMP"
+	}
+	prev, had := os.LookupEnv(key)
+	if err := os.Setenv(key, dir); err != nil {
+		os.Remove(dir)
+		return nil, fmt.Errorf("setting %s: %w", key, err)
+	}
+	return func() {
+		if had {
+			os.Setenv(key, prev)
+		} else {
+			os.Unsetenv(key)
+		}
+		os.RemoveAll(dir)
+	}, nil
 }
 
 // Extract reads metadata from the file at path. It never returns an error

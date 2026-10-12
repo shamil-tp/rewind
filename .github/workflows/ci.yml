@@ -136,3 +136,42 @@ jobs:
         run: |
           go mod download
           sh scripts/third-party.sh "$RUNNER_TEMP/third-party" bin/rewind
+
+  install:
+    name: Installation test (systemd)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      # Two binary-only release archives with different versions, packaged by
+      # the release script itself (no source or LGPL archives).
+      - name: Package two test versions
+        env:
+          GOOS: linux
+          GOARCH: amd64
+          PACKAGE_BINARY_ONLY: "1"
+        run: |
+          go mod download
+          VERSION=ci-old sh scripts/build.sh
+          sh scripts/package-release.sh ci-old "$RUNNER_TEMP/old"
+          VERSION=ci-new sh scripts/build.sh
+          sh scripts/package-release.sh ci-new "$RUNNER_TEMP/new"
+
+      # The runner is disposable and has systemd and passwordless sudo:
+      # install.sh installs a real service, then upgrades and rolls back.
+      - name: Install, upgrade and roll back with install.sh
+        run: sudo sh scripts/install-test.sh "$RUNNER_TEMP/old" "$RUNNER_TEMP/new"

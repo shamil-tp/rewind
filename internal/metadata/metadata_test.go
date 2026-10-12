@@ -4,8 +4,12 @@ package metadata
 
 import (
 	"bytes"
+	"errors"
+	"io/fs"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -197,5 +201,77 @@ func TestExtractNeverWritesSource(t *testing.T) {
 			t.Errorf("%s: source file changed by Extract", ext)
 		}
 		os.Chmod(p, 0o644) // let TempDir cleanup remove it on Windows
+	}
+}
+
+func TestUsePrivateTempDir(t *testing.T) {
+	before := os.TempDir()
+	cleanup, err := UsePrivateTempDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := os.TempDir()
+	if dir == before || filepath.Dir(dir) != filepath.Clean(before) {
+		t.Fatalf("temporary directory = %q, want a new directory inside %q", dir, before)
+	}
+	info, err := os.Stat(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if runtime.GOOS != "windows" && info.Mode().Perm() != 0o700 {
+		t.Errorf("mode = %v, want 0700", info.Mode().Perm())
+	}
+	cleanup()
+	if got := os.TempDir(); got != before {
+		t.Errorf("after cleanup the temporary directory is %q, want %q", got, before)
+	}
+	if _, err := os.Stat(dir); !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("private directory not removed: %v", err)
+	}
+}
+
+// Regression test: taglib's compiled-code cache must never be read from, or
+// written to, a directory another user could have created in a shared /tmp.
+// taglib creates its runtime once per process, so the check runs in a fresh
+// copy of the test binary whose TMPDIR stands in for a shared /tmp.
+func TestTaglibCacheIgnoresSharedTempDir(t *testing.T) {
+	if os.Getenv("REWIND_TEST_TAGLIB_CHILD") == "1" {
+		p := testaudio.Write(t, os.Getenv("REWIND_TEST_AUDIO_DIR"), "a.wav", 1, nil)
+		cleanup, err := UsePrivateTempDir()
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer cleanup()
+		if m := Extract(p); m.Status == StatusError {
+			t.Fatalf("extract failed: %s", m.Error)
+		}
+		if _, err := os.Stat(filepath.Join(os.TempDir(), "go-taglib-wasm")); err != nil {
+			t.Fatalf("taglib's cache is not in the private temporary directory: %v", err)
+		}
+		return
+	}
+
+	shared := t.TempDir()
+	planted := filepath.Join(shared, "go-taglib-wasm")
+	if err := os.Mkdir(planted, 0o777); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command(os.Args[0], "-test.run=^TestTaglibCacheIgnoresSharedTempDir$", "-test.count=1")
+	cmd.Env = append(os.Environ(), "REWIND_TEST_TAGLIB_CHILD=1", "REWIND_TEST_AUDIO_DIR="+t.TempDir(),
+		"TMPDIR="+shared, "TMP="+shared, "TEMP="+shared)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("child test failed: %v\n%s", err, out)
+	}
+	if entries, err := os.ReadDir(planted); err != nil || len(entries) != 0 {
+		t.Errorf("taglib used the planted directory in the shared temporary directory: %v %v", entries, err)
+	}
+	entries, err := os.ReadDir(shared)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entries {
+		if strings.HasPrefix(e.Name(), "rewind-") {
+			t.Errorf("private temporary directory %s was not removed", e.Name())
+		}
 	}
 }

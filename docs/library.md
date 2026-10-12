@@ -1,9 +1,9 @@
 # Music library and scanning
 
-Status: **Phase 4.** Rewind indexes music folders into its database, and
-the indexed library can be browsed and rescanned through the authenticated
-API (see [api.md](api.md#music-library)). The web interface lists and
-searches tracks and plays them in the browser.
+Rewind indexes music folders into its database. The indexed library can be
+browsed, searched, played and rescanned in the web interface and through
+the authenticated API ([api.md](api.md#music-library)). For a server
+installation with systemd, start with [install.md](install.md#4-add-your-music).
 
 ## Configure a library root
 
@@ -85,6 +85,12 @@ Rewind only needs to **read** the music. Recommended:
   `lsblk -f`.
 - On ext4 or other Unix filesystems, the folders need `r-x` and the files
   `r--` for Rewind's user.
+- With the provided systemd unit (`rewind.service`), the whole file system
+  is read-only for Rewind, except its data directory. Reading music works
+  anywhere the `rewind` user has permission. Home directories are often
+  `0700` or `0750`, though, so a folder under `/home` is usually not
+  readable by `rewind`. Mount points such as `/srv/usb-music` or `/media/…`
+  avoid this.
 
 Unreadable sub-folders make a scan *partial* (see below). Unreadable files
 are indexed with an error and retried on the next scan.
@@ -105,8 +111,9 @@ Metadata is read with TagLib (via `go.senan.xyz/taglib`). Rewind's tests cover
 all five formats with generated files.
 
 Supported metadata does **not** mean every browser can play the file. For
-example, ALAC inside `.m4a` is not supported by every browser. Playback
-support is handled with streaming in a later phase.
+example, ALAC inside `.m4a` is not supported by every browser. Rewind streams
+the original file and does not transcode, so a browser that cannot decode a
+file shows a playback error for it.
 
 Other files are skipped and counted, including `.opus`, `.wma`, raw `.aac`,
 images and text. Also skipped:
@@ -242,8 +249,8 @@ sqlite3 /var/lib/rewind/rewind.db \
   - database: 632 KB.
 
   Expect real pendrives on modest hardware to be much slower, because USB
-  I/O dominates. Measurements on the target hardware are planned for
-  Phase 10.
+  I/O dominates. Measurements on the owner's target hardware are still to
+  be made (see [security-audit.md](security-audit.md#4-measurements)).
 
 ## Running the scanner tests
 

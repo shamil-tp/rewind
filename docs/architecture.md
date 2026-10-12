@@ -1,6 +1,6 @@
 # Rewind Architecture
 
-Status: **Phase 11.** Sections marked *implemented* describe working code. All
+Status: **Phase 12.** Sections marked *implemented* describe working code. All
 other sections describe intended behavior and are updated as each phase lands.
 
 ## 1. Goals and constraints
@@ -109,7 +109,7 @@ actually added.
 | indirect: `modernc.org/libc` v1.77.1 (BSD-3; includes musl, MIT), `modernc.org/mathutil`, `modernc.org/memory` (BSD-3), `golang.org/x/sys` (BSD-3), `google/uuid` (BSD-3), `remyoudompheng/bigfft` (BSD-3), `dustin/go-humanize` (MIT), `mattn/go-isatty` (MIT), `ncruces/go-strftime` (MIT) | as listed; verified from the downloaded LICENSE files | Driver internals | Added in Phase 2 |
 | `golang.org/x/crypto` v0.58.0 | BSD-3-Clause | Argon2id password hashing (`argon2` package); maintained by the Go team | **Added in Phase 2** |
 | `go.senan.xyz/taglib` v0.14.0 | **LGPL-2.1** (TagLib 2.1.1 inside, LGPL-2.1/MPL-1.1) | Tags, duration and codec for MP3/FLAC/M4A/Ogg/WAV; TagLib compiled to WebAssembly, no CGO | **Added in Phase 3** (owner decision) |
-| `github.com/tetratelabs/wazero` (pseudo-version pinned by go-taglib) | Apache-2.0 (NOTICE: "wazero, Copyright 2020-2023 wazero authors") | WebAssembly runtime used by taglib | Added in Phase 3 (indirect) |
+| `github.com/tetratelabs/wazero` (pseudo-version pinned by go-taglib) | Apache-2.0 (NOTICE: "wazero, Copyright 2020-2023 wazero authors") | WebAssembly runtime used by taglib. It compiles the module to machine code and caches it in `os.TempDir()`, which Rewind points at a private directory (security-audit.md, F8) | Added in Phase 3 (indirect) |
 
 All Go dependencies except go-taglib are permissively licensed
 (BSD-2/BSD-3/MIT/Apache-2.0, public domain). go-taglib is LGPL-2.1; see the
@@ -988,7 +988,14 @@ Phase 10 still performs the full endpoint-by-endpoint review.
 
 - One binary, run by systemd as an unprivileged user (no root, no privileged
   container), with configuration from environment variables
-  (`EnvironmentFile=`).
+  (`EnvironmentFile=`). *Implemented in Phase 12:* `release/rewind.service`
+  (hardened unit) and `scripts/install.sh`. The installer keeps versioned
+  releases in `/opt/rewind/releases/<version>` with a `current` symlink,
+  the same layout `deploy.yml` uses. It verifies `SHA256SUMS` and test-starts
+  a new binary on a spare loopback port before switching. It backs up the
+  database before upgrades and rollbacks, and never restores a database or
+  overwrites configuration. See [install.md](install.md) and
+  [operations.md](operations.md).
 - `REWIND_DATA_DIR` (recommended: `/var/lib/rewind`, owned by the service
   user) holds the SQLite database and, before first setup, the setup code.
   Backups copy the database (see §5a), not the music.
@@ -1027,7 +1034,7 @@ Phase 10 still performs the full endpoint-by-endpoint review.
 | 10 | Plugin architecture (CLAUDE.md "Phase 9" scope): compiled-in, administrator-enabled plugins with JSON manifests, discovery through `os.Root`, a lifecycle manager with deadlines and failure containment, one extension point (`events.library_scan`), read-only `GET /api/plugins` and a Settings status section, and the `missing-tracks` example plugin. No runtime loading, no install/enable endpoints. |
 | 11 | Security, reliability and performance audit (CLAUDE.md "Phase 10" scope), documented in [security-audit.md](security-audit.md): Range zero-suffix fix, stream-open race check (`os.SameFile`), non-destructive password recovery, private deploy backups, two test-reliability fixes, measurements on a development machine. No new features, dependencies or schema changes. |
 | later | Resource measurement on the owner's actual hardware. |
-| 12 | Release packaging (CLAUDE.md "Phase 11" scope) is implemented early (see "CI/CD" above): THIRD_PARTY_NOTICES, LICENSES/, LGPL corresponding source including TagLib's submodule sources. That phase still covers installation testing on a clean server. |
+| 12 | Packaging and release readiness (CLAUDE.md "Phase 11" scope). Release packaging was implemented earlier (see "CI/CD" above). Phase 12 adds: the hardened systemd unit and server configuration template in `release/`, `install.sh` (install, upgrade, rollback, status), an end-to-end installation test run in CI (`install-test.sh`), `release-check.sh`, the installation, configuration and operations guides, SECURITY.md, CONTRIBUTING.md, CHANGELOG.md and issue templates. It also fixes security-audit F8: taglib's compiled-code cache is moved out of the shared `/tmp`. No new features, no schema change and no new dependency. |
 
 ### Phase 1 acceptance criteria (as amended)
 
@@ -1084,5 +1091,7 @@ purging missing tracks and disabled roots, indexes for the library API
 column if more accounts are ever added, a trusted reverse-proxy model
 (deliberately not implemented in Phase 7: forwarding headers are ignored),
 WAL mode (only if contention is measured), artwork cache and thumbnails
-(3/7), Media Session lock-screen controls, user-defined theme files (left out in Phase 9), plugin trust model, container image vs native
-package (11), and arm64 builds (after amd64 is stable).
+(3/7), Media Session lock-screen controls, user-defined theme files (left out in Phase 9), plugin trust model, a container image (Phase 12
+chose a native systemd installation; no image is published), Debian/Ubuntu
+packages (`.deb`), signed releases, and arm64 builds (after amd64 is
+stable, and only once tested).

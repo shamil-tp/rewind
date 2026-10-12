@@ -25,7 +25,8 @@ private network.
 | F4 | Low | Defense in depth, confirmed | Race between the symlink check and the open in `OpenTrack`: a relative symlink (or another file) swapped in during that window was served, though always from inside the same root | Fixed |
 | F5 | — | Test reliability, confirmed | `TestSlowAndFailingHandlersDoNotBlock` failed intermittently on Linux (most runs with `-count=10`) | Fixed |
 | F6 | — | CI performance, confirmed | Two stalled-reader tests took 67 s each on Linux, adding more than 2 minutes to every Linux test run | Fixed |
-| F7 | — | Repository hygiene | Empty `.github/workflows/releases.yml`; untracked, un-ignored `pid` file; `google/uuid` approved in `release/third-party-modules.txt` but no longer linked | Reported, not changed |
+| F7 | — | Repository hygiene | Empty `.github/workflows/releases.yml`; a stray `pid` file; `google/uuid` reported as no longer linked (corrected in §8) | Files deleted in Phase 12 |
+| F8 | Medium (local, shared machines only) | Code execution, confirmed (Phase 12) | go-taglib kept compiled machine code in a predictable directory in the shared `/tmp`, and used an existing directory there that another local user could have planted | Fixed in Phase 12 (§8) |
 
 ### F1: password recovery deleted playlists and preferences
 
@@ -322,4 +323,56 @@ CI.
   restore after upgrades.
 - Use the non-destructive password recovery in architecture.md; never
   `DELETE FROM users`.
-- Delete `releases.yml` and `pid` (F7) before the next commit.
+- `releases.yml` and `pid` (F7) were deleted in Phase 12.
+
+## 8. Addendum: Phase 12 (packaging and installation)
+
+### F8: compiled-code cache in a shared temporary directory
+
+- **Where:** `go.senan.xyz/taglib` v0.14.0 (`getRuntimeOnce` in
+  `taglib.go`) creates its wazero runtime with a compilation cache in
+  `os.TempDir()/go-taglib-wasm`, normally `/tmp/go-taglib-wasm`. The cache
+  holds the TagLib module compiled to machine code.
+- **Problem:** wazero (`cache.go`, `mkdir`) creates the directory only if
+  it does not exist, and otherwise uses it whoever owns it. A cache entry is
+  checked only with CRC32, which is not an authenticity check, and is then
+  mapped as executable code. The directory name is fixed. A local user who
+  creates `/tmp/go-taglib-wasm` before Rewind's first scan could therefore
+  plant code that Rewind runs with its own privileges. That code would reach
+  the database (password and session hashes) and could read the music.
+- **Who was affected:** only machines where untrusted users have a local
+  account, and only when Rewind ran without a private `/tmp`: development
+  runs, or running the binary by hand. The systemd unit added in Phase 12
+  sets `PrivateTmp=true`. Nothing was reachable over the network.
+- **Confirmed:** a regression test plants the directory in a stand-in for a
+  shared temporary directory and runs the real library in a fresh process.
+  Without the fix, taglib wrote `wazero-v1.11.1-…-amd64-linux/` into the
+  planted directory (Linux, 2026-10-12).
+- **Fix:** at startup, Rewind points `TMPDIR` (`TMP` on Windows) at a new
+  directory created by `os.MkdirTemp`, with mode 0700 and an unpredictable
+  name. It is removed at shutdown (`metadata.UsePrivateTempDir`, called from
+  `cmd/rewind`). The cache keeps working inside that directory for the
+  lifetime of the process. Rewind uses the temporary directory for nothing
+  else.
+- **Tests:** `TestUsePrivateTempDir` and
+  `TestTaglibCacheIgnoresSharedTempDir` in `internal/metadata`. The second
+  fails without the fix and passes with it on Linux, and passes on Windows.
+- **Hardening considered:** `MemoryDenyWriteExecute=true` forbids
+  executable memory altogether, and wazero then quietly falls back to its
+  interpreter. Measured with 2,000 generated WAV files in WSL, scans took
+  0.77–0.87 s with the compiler and 1.83–1.88 s with the interpreter, which
+  also used about twice the CPU time. It is not enabled by default, because
+  of that CPU cost on modest hardware. The unit file explains the trade-off.
+
+### Corrections to Phase 11
+
+- **`google/uuid` is linked** into the Linux binary, through
+  `modernc.org/libc`, as `release/third-party-modules.txt` says. F7's
+  statement that it was no longer linked came from a non-Linux module list,
+  so the entry stays. On Linux, `third-party.sh` reports `mattn/go-isatty`
+  and `ncruces/go-strftime` as unlinked. That is expected, because both are
+  Windows-only.
+- **Not run in Phase 11, run in Phase 12:** `scripts/package-release.sh` and
+  `scripts/lgpl-sources.sh` both passed on a committed snapshot of the
+  working tree in WSL, and the LGPL source downloads matched their pinned
+  checksums. See [deployment.md, "Release validation"](deployment.md#release-validation).

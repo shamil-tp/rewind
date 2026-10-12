@@ -1,121 +1,157 @@
 # Rewind
 
-Rewind is a lightweight, self-hosted music streaming server for music you own.
-Plug a USB drive full of music into your home server, point Rewind at it, and
-listen from any browser on your home network or over your private Tailscale
-network.
+Rewind is a lightweight, self-hosted music server for music you own. Plug a
+USB drive full of music into your home server and point Rewind at it. You can
+then listen in a browser on the server, on your home network, or over your
+private Tailscale network. It needs no accounts with anyone, no cloud
+service and no telemetry.
 
-> **Status: pre-alpha (Phase 3).** The server stores its state in SQLite,
-> creates an owner account on first run, supports signing in and out, and can
-> index music folders (for example a mounted pendrive) into its database.
-> Signed in, you get the Rewind music player: browse, search and sort your
-> library, play tracks from a bottom playback bar, build playlists and play
-> them in order, pick a color theme (dark, light or OLED black), set a few
-> preferences, and check the library status or rescan. Over HTTPS (or on the server itself) it can be installed as an app.
-> Other devices can connect through your LAN or Tailscale once you enable it.
-> Artist and album pages come in later phases. The goals below are planned,
-> not implemented.
+> **Status: pre-release.** No version has been published yet. The features
+> below are implemented and tested. The first release is being prepared;
+> see [CHANGELOG.md](CHANGELOG.md).
 
-## Current restrictions
+## Features
 
-- **Local machine only by default.** Rewind listens on `127.0.0.1:8090`.
-  LAN and Tailscale access are opt-in and fail closed. Every device still
-  signs in with your password. See
-  [Network access](docs/deployment.md#network-access); the recommended
-  remote setup is HTTPS through `tailscale serve`. Rewind never opens
-  firewall ports or exposes itself publicly.
-- One owner account, created on the server itself. Playlists play in order
-  with previous/next, but there is no separate play queue yet. Music is
-  streamed and never stored on your devices.
+- **Your files stay where they are.** Rewind indexes MP3, FLAC, M4A (AAC or
+  ALAC), Ogg and WAV files from one or more folders, such as a mounted
+  pendrive. It reads tags with TagLib and never writes to the music.
+  Rescans are incremental. Unplugging the drive keeps the library and
+  playlists.
+- **Web player:** browse, search and sort the library, and stream with
+  seeking (HTTP Range). The browser plays the original files; nothing is
+  transcoded.
+- **Playlists**, played in order with previous and next. Preferences are
+  saved per account.
+- **Themes:** Rewind Dark (dark neo-brutalist, the default), Light, OLED
+  Black, and a custom accent color with contrast checks.
+- **Installable web app (PWA)** over HTTPS or on localhost. Only the
+  interface is cached: music, library data and sign-in are never stored on
+  the device.
+- **Private by default:** listens on `127.0.0.1` only, with one owner
+  account and no default password. LAN and Tailscale access must be turned
+  on explicitly.
+- **Small:** one Go binary with the web interface built in, and one SQLite
+  file. No Node.js, database server or Docker on the server.
+- **Optional plugins**, compiled in, which the administrator must enable
+  ([docs/plugins.md](docs/plugins.md)).
 
-## First run
+**Not available yet:** artist and album pages, a separate play queue,
+lock-screen media controls, artwork display, offline downloads, more than
+one account, and arm64 builds.
 
-1. Start Rewind (see below). With no account yet, it writes a one-time setup
-   code to `setup-code` in its data directory (default `./data`) and logs that
-   file's path. The code itself is never logged.
-2. Open Rewind in a browser **on the same machine**, for example
-   http://127.0.0.1:8090 (or http://localhost:5173 in development).
-3. Enter the setup code, choose a username and a password of at least 12
-   characters, and select **Create account**. You are signed in, and the setup
-   code file is deleted.
+## Supported platforms
 
-The setup page only accepts requests from the machine itself. No default
-account or password exists. A forgotten password cannot be reset by email;
-see [docs/architecture.md](docs/architecture.md#password-recovery) for the
-recovery procedure.
+- **Server:** Linux x86-64 (amd64) with systemd. The intended range is
+  Ubuntu Server 24.04 and 26.04 LTS, and Debian 12 and 13. The installer has
+  been tested on Ubuntu 26.04. Other platforms are for development only.
+  Details: [docs/install.md](docs/install.md#supported-platforms).
+- **Browsers:** Chrome and Edge 111+, Firefox 114+, Safari 16.4+ (iOS
+  16.4+). Codec support is the browser's: MP3, AAC, FLAC and WAV are widely
+  supported, while Ogg Vorbis and ALAC are not supported everywhere.
 
-## Index your music
+## Quick start
 
-Mount the pendrive (Rewind never mounts drives), then point Rewind at it and
-start or restart Rewind:
-
-```sh
-REWIND_LIBRARY_ROOTS=/media/you/MUSICSTICK ./bin/rewind
-```
-
-Rewind reads the folder without modifying it, indexes MP3, FLAC, M4A, Ogg
-and WAV files, and keeps the index when the stick is unplugged. See
-[docs/library.md](docs/library.md) for mount paths, permissions, and how
-scans and missing files behave.
-
-## Quick start (development)
-
-Requires Go 1.26+ and, for the frontend, Node.js 24 with npm.
+On the server, download a release, verify it and install it as a systemd
+service:
 
 ```sh
-go run ./cmd/rewind                  # backend on http://127.0.0.1:8090
-cd web && npm ci && npm run dev      # frontend with hot reload on http://localhost:5173
+VERSION=v0.1.0
+base="https://github.com/shamil-tp/rewind/releases/download/$VERSION"
+curl -fLO "$base/rewind-$VERSION-linux-amd64.tar.gz"
+curl -fLO "$base/install.sh"
+curl -fLO "$base/SHA256SUMS"
+sha256sum -c SHA256SUMS --ignore-missing      # both lines must say OK
+sudo sh install.sh install rewind-$VERSION-linux-amd64.tar.gz
 ```
 
-Production build (single binary with the frontend embedded):
+Then:
 
-```sh
-scripts/build.sh && ./bin/rewind
-```
+1. **Create the owner account.** Setup only works from the server itself.
+   From your computer, open a tunnel (`ssh -L 8090:127.0.0.1:8090
+   you@server`), browse to http://localhost:8090, and enter the code from
+   `sudo cat /var/lib/rewind/setup-code`.
+2. **Add music.** Mount the drive, set `REWIND_LIBRARY_ROOTS=/your/mount`
+   in `/etc/rewind/rewind.env`, and run `sudo systemctl restart rewind`.
+3. **Optional: use it from other devices** with `tailscale serve` (HTTPS,
+   recommended) or on your LAN. See
+   [Network access](docs/deployment.md#network-access).
 
-Details, configuration and checks are in
-[docs/development.md](docs/development.md).
+The full guide, including a manual installation without the script, is
+[docs/install.md](docs/install.md).
 
-## Goals
+## Security defaults
 
-- Stream your own music files to your own devices. No accounts, cloud services,
-  telemetry, or tracking.
-- Run comfortably on modest Linux hardware as a single process with a single
-  SQLite database file.
-- Never modify your music: the library directory is treated as read-only.
-- Survive a disconnected USB drive without losing the library or playlists.
-- Installable as a Progressive Web App, with a minimal dark interface.
+- Reachable only from the server until you configure LAN or Tailscale
+  access. Rewind never opens firewall ports and is never exposed to the
+  internet.
+- Every device signs in. Being on the same network grants nothing.
+- Passwords are stored as Argon2id hashes, sessions are server-side, and
+  cookies are `HttpOnly` and `SameSite=Strict`. Sign-in is rate-limited.
+- Files are served only through the database record of an indexed track,
+  only from inside its configured folder, and never through symbolic links.
+- The service runs as an unprivileged user, with the file system read-only
+  except for its data directory.
 
-## Planned stack
+Plain HTTP on a LAN sends the password unencrypted; prefer HTTPS through
+`tailscale serve`. See [SECURITY.md](SECURITY.md) for the security model
+and how to report vulnerabilities.
 
-| Layer    | Choice                                                  |
-| -------- | ------------------------------------------------------- |
-| Server   | Go, standard library `net/http`                         |
-| Database | SQLite (pure-Go driver, no CGO)                         |
-| Frontend | Svelte, TypeScript, Vite, compiled into the Go binary   |
-| Playback | Browser HTML audio with HTTP Range streaming            |
-| Network  | LAN and Tailscale access, nothing is exposed publicly   |
+## Operating it
 
-Primary target: Linux (Ubuntu Server / Debian) on amd64.
+- **Logs and status:** `journalctl -u rewind`, `sudo sh install.sh status`.
+- **Backup:** the database `/var/lib/rewind/rewind.db` is the only state.
+  Back it up with `sqlite3 .backup`, or by copying it while Rewind is
+  stopped. Music is not part of the backup.
+- **Upgrade:** `sudo sh install.sh upgrade <archive>` verifies the archive,
+  test-starts it, backs up the database, switches, and health-checks.
+- **Rollback:** `sudo sh install.sh rollback <version>`. A newer release
+  may have migrated the database; then restore the backup made before the
+  upgrade.
+
+Everything is described in [docs/operations.md](docs/operations.md),
+including troubleshooting, restoring a backup and password recovery.
 
 ## Documentation
 
-- [Architecture](docs/architecture.md): design, data model, security model, and
-  roadmap.
-- [Development](docs/development.md): prerequisites, configuration, development
-  and production builds.
-- [Music library](docs/library.md): configuring library folders, scanning,
-  and disconnected drives.
-- [API](docs/api.md): the HTTP endpoints that exist today.
-- [Themes](docs/themes.md): built-in themes, the custom accent color, and how
-  to add a theme.
-- [Plugins](docs/plugins.md): the trusted, compiled-in plugin system, its
-  security model, and how to enable or write a plugin.
-- [Building, releasing and deploying](docs/deployment.md): CI, versioned
-  releases, release assets and checksums, and manual SSH deployment.
+| Document | Contents |
+| --- | --- |
+| [install.md](docs/install.md) | installation, first run, USB music, uninstalling |
+| [configuration.md](docs/configuration.md) | every setting |
+| [operations.md](docs/operations.md) | service, logs, backup and restore, upgrade and rollback, troubleshooting |
+| [library.md](docs/library.md) | music folders, mount paths, permissions, scanning, disconnected drives |
+| [deployment.md](docs/deployment.md) | network access (LAN, Tailscale, PWA), CI, releases, SSH deployment |
+| [api.md](docs/api.md) | HTTP API |
+| [themes.md](docs/themes.md), [plugins.md](docs/plugins.md) | themes and plugins |
+| [architecture.md](docs/architecture.md) | design, data model, security model, decisions |
+| [security-audit.md](docs/security-audit.md) | the latest security and reliability audit |
+| [development.md](docs/development.md) | building from source, development mode, tests |
+
+## Building from source
+
+You need Go (the version in `go.mod`), and Node.js 24 with npm for the web
+interface:
+
+```sh
+sh scripts/build.sh && ./bin/rewind        # production binary on http://127.0.0.1:8090
+go run ./cmd/rewind                        # development backend
+cd web && npm ci && npm run dev            # development frontend on http://localhost:5173
+```
+
+See [docs/development.md](docs/development.md).
+
+## Contributing
+
+Issues and pull requests are welcome; see [CONTRIBUTING.md](CONTRIBUTING.md).
+Rewind deliberately stays small: please check the project principles before
+proposing large features.
 
 ## License
 
-Rewind is licensed under the [Apache License 2.0](LICENSE). Third-party
-components keep their own licenses; see `docs/architecture.md` for the
-dependency license review.
+Rewind is licensed under the [Apache License 2.0](LICENSE).
+
+Release binaries also contain third-party code under its own licenses,
+listed in `THIRD_PARTY_NOTICES.md` and `LICENSES/` inside each release
+archive. This includes `go.senan.xyz/taglib` and TagLib under the GNU LGPL
+2.1. Their complete corresponding source is published with every release
+(`rewind-<version>-lgpl-sources.tar.gz`). The license review is in
+[docs/architecture.md §4](docs/architecture.md#4-dependencies-and-license-review).

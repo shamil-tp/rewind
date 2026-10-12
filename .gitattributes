@@ -1,2 +1,5 @@
 # Shell scripts must keep LF line endings to run on Linux.
 *.sh text eol=lf
+# systemd reads these on Linux servers; keep LF line endings.
+release/rewind.service text eol=lf
+release/rewind.env text eol=lf

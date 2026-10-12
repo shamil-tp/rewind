@@ -5,7 +5,7 @@ Rewind is built and shipped with three GitHub Actions workflows in
 
 | Workflow | Runs on | Does | Secrets |
 | --- | --- | --- | --- |
-| `ci.yml` | pull requests to `main`, pushes to `main`, manual | tests, type checks, embedded production build, smoke test, license check | none |
+| `ci.yml` | pull requests to `main`, pushes to `main`, manual | tests, type checks, embedded production build, smoke test, license check, installation test | none |
 | `release.yml` | pushes of tags `v*` only | verifies the tag, builds and packages Linux amd64, publishes a GitHub Release | none (uses the run's own token, write access only in the publish job) |
 | `deploy.yml` | manual only (`workflow_dispatch`) | builds and verifies, then joins your tailnet and deploys over SSH, through Tailscale only, after approval | SSH key and Tailscale federated-identity settings (`production` environment) |
 
@@ -15,13 +15,14 @@ plus Tailscale's official `tailscale/github-action` in `deploy.yml`. The Go
 toolchain comes from the `toolchain` line in `go.mod` (currently go1.27.1),
 and Node.js 24 is used for the frontend.
 
-**Status:** the workflows are validated locally (actionlint with shellcheck,
-and dry runs of the build and packaging scripts) but have **not yet run on
-GitHub**.
+**Status:** the workflows have **not yet run on GitHub**. Their steps were run
+locally (see [Release validation](#release-validation)). The Phase 12
+changes to the workflow files were reviewed by hand, but not re-checked with
+actionlint.
 
 ## Continuous integration (`ci.yml`)
 
-Three parallel jobs, all read-only (`contents: read`):
+Four parallel jobs, all read-only (`contents: read`):
 
 - **Go:** `gofmt`, `go mod tidy -diff`, `go mod verify`, `go vet ./...`,
   `go test -race ./...`, and a CGO-free linux/amd64 build.
@@ -37,6 +38,13 @@ Three parallel jobs, all read-only (`contents: read`):
      the placeholder), and that assets have the right content type.
   4. Runs `scripts/third-party.sh`, so a new unreviewed dependency fails CI
      long before a release.
+- **Installation test:** packages two binary-only release archives
+  (`PACKAGE_BINARY_ONLY=1`) and runs `scripts/install-test.sh` with `sudo`
+  on the disposable runner. That test installs a real systemd service with
+  `install.sh` and completes first-run setup. It then indexes and streams
+  generated WAV files, upgrades, and checks the database backup. It rejects
+  tampered and mismatched archives, rolls back, and removes everything
+  again.
 
 Superseded runs for the same pull request are cancelled. Runs on `main`
 always finish. To run CI manually: **Actions → CI → Run workflow**, or
@@ -75,9 +83,12 @@ corresponds to exactly one pushed tag.
    - builds `bin/rewind` for linux/amd64 with the frontend embedded and the
      tag as the version;
    - smoke-tests it;
-   - runs `scripts/package-release.sh`, which collects license texts, builds
-     the source bundles and writes checksums. It fails on any licensing
-     problem.
+   - runs `scripts/package-release.sh`. It collects license texts, builds
+     the source bundles, checks that the archive contains everything an
+     installation needs, adds `install.sh`, and writes checksums. It fails on
+     any licensing problem;
+   - extracts the packaged binary, checks that it is identical to the one
+     built, and smoke-tests it again.
    - The Go module cache is not used for release builds.
 3. **publish:** the only job with write access (`contents: write`). It
    verifies the checksums and creates the GitHub Release with `gh release
@@ -87,10 +98,11 @@ corresponds to exactly one pushed tag.
 
 | File | Contents |
 | --- | --- |
-| `rewind-<version>-linux-amd64.tar.gz` | `rewind` (single static binary, web interface embedded), `LICENSE`, `README.md`, `THIRD_PARTY_NOTICES.md`, `LICENSES/`, `docs/` (this file, `library.md`, `api.md`), `rewind.env.example` |
+| `rewind-<version>-linux-amd64.tar.gz` | `rewind` (single static binary, web interface embedded), `rewind.service` (systemd unit), `rewind.env.example` (server configuration template, from `release/rewind.env`), `LICENSE`, `README.md`, `CHANGELOG.md`, `SECURITY.md`, `THIRD_PARTY_NOTICES.md`, `LICENSES/`, `docs/` (install, configuration, operations, library, deployment, api, themes, plugins) |
+| `install.sh` | the installer (`scripts/install.sh`), see [install.md](install.md) |
 | `rewind-<version>-source.tar.gz` | Rewind's source at the tag (`git archive`) |
 | `rewind-<version>-lgpl-sources.tar.gz` | corresponding source for the LGPL-2.1 components and relinking instructions (see below) |
-| `SHA256SUMS` | SHA-256 checksums of the three archives |
+| `SHA256SUMS` | SHA-256 checksums of the three archives and `install.sh` |
 
 Only **Linux x86-64 (amd64)** is built. arm64 is a future roadmap item and
 is not claimed.
@@ -105,10 +117,12 @@ audio files.
 VERSION=v0.1.0
 base="https://github.com/shamil-tp/rewind/releases/download/$VERSION"
 curl -fLO "$base/rewind-$VERSION-linux-amd64.tar.gz"
+curl -fLO "$base/install.sh"
 curl -fLO "$base/SHA256SUMS"
-sha256sum -c SHA256SUMS --ignore-missing   # must print: ... OK
-tar -xzf "rewind-$VERSION-linux-amd64.tar.gz"
+sha256sum -c SHA256SUMS --ignore-missing   # must print: ... OK for each file
 ```
+
+Then install with `install.sh`, or by hand ([install.md](install.md)).
 
 The checksum file comes from the same release page, so it detects corrupted
 downloads, not a compromised GitHub account. Releases are not signed yet.
@@ -158,53 +172,99 @@ the obligations identified in `docs/architecture.md` §4, not legal advice.
 
 Before tagging:
 
-- [ ] CI is green on the commit you will tag.
+- [ ] CI is green on the commit you will tag, including the installation
+  test.
+- [ ] `sh scripts/release-check.sh vX.Y.Z-rc.N` passes on a Linux machine
+  from a clean checkout of that commit (see
+  [Release validation](#release-validation)). Run it with
+  `RELEASE_CHECK_INSTALL=1` on a disposable VM, if you have one.
+- [ ] `go run golang.org/x/vuln/cmd/govulncheck@latest ./...` reports no
+  vulnerability that affects Rewind, and `npm audit` in `web/` is reviewed
+  (the frontend has build-time dependencies only).
 - [ ] If dependencies changed (`go.mod`, `go.sum`, `web/package-lock.json`):
   - [ ] For each new Go module, read its license, then add it to
     `release/third-party-modules.txt`.
   - [ ] If **go-taglib** changed: check its new TagLib submodule commit and
     wasm build toolchain, refresh `release/notices/` from the exact upstream
     commits, and update the pins and checksums in `scripts/lgpl-sources.sh`.
+    Also check that it still caches compiled code under `os.TempDir()`
+    (security-audit.md, F8).
   - [ ] If a frontend runtime dependency besides Svelte was added, add its
     license to `scripts/third-party.sh`.
+- [ ] Database migrations added since the last release are listed in
+  `CHANGELOG.md`, with a note that older releases cannot open a migrated
+  database.
+- [ ] `CHANGELOG.md`: rename **Unreleased** to the version and date.
 - [ ] `README.md` and `docs/` describe the release accurately; no
-  unimplemented feature is claimed.
+  unimplemented feature or untested platform is claimed.
+- [ ] If `release/rewind.service` changed, the changelog says so: upgrades
+  keep the installed unit and only print a `diff` command.
 
 After the release is published:
 
-- [ ] Download the three archives and `SHA256SUMS`, and run
+- [ ] Download the four assets and `SHA256SUMS`, and run
   `sha256sum -c SHA256SUMS`.
 - [ ] Unpack the binary archive and check `THIRD_PARTY_NOTICES.md` and
   `LICENSES/`.
 - [ ] Open `rewind-<version>-lgpl-sources.tar.gz` and confirm it contains
   `go-taglib-v0.14.0.zip`, the TagLib and utfcpp archives, and `README.md`.
+- [ ] Install the release on a clean Ubuntu or Debian machine with
+  `install.sh` and follow [install.md](install.md) once, by hand: setup
+  through an SSH tunnel, a real USB drive, playback in a browser.
 
-## Installing a release manually
+### Release validation
 
-On an Ubuntu or Debian amd64 server:
+`scripts/release-check.sh VERSION [OUTDIR]` runs on Linux what CI and the
+release workflow run, without tagging or publishing:
 
-```sh
-sudo useradd --system --home /var/lib/rewind --shell /usr/sbin/nologin rewind
-sudo install -d -o rewind -g rewind -m 0700 /var/lib/rewind
-sudo install -d -o root -g root -m 0755 /opt/rewind
-sudo install -m 0755 rewind-v0.1.0-linux-amd64/rewind /opt/rewind/rewind
-sudo install -d -m 0755 /etc/rewind
-sudo install -m 0640 -o root -g rewind rewind-v0.1.0-linux-amd64/rewind.env.example /etc/rewind/rewind.env
-sudoedit /etc/rewind/rewind.env   # set REWIND_DATA_DIR=/var/lib/rewind, REWIND_LIBRARY_ROOTS=...
-```
+1. gofmt, `go mod tidy -diff`, `go mod verify`, `go vet`;
+2. Go tests, with `-race` when a C compiler is available (the summary says
+   when it is not);
+3. `npm ci`, `npm run check` and `npm test`;
+4. the release build (`scripts/build.sh`), the `rewind_embed` tests, and the
+   smoke test;
+5. `scripts/package-release.sh`, `sha256sum -c`, a listing of the archive,
+   and a smoke test of the binary taken from the archive;
+6. `sh -n` on every script, and shellcheck if it is installed;
+7. with `RELEASE_CHECK_INSTALL=1`, `scripts/install-test.sh` through
+   `sudo`. That test changes the machine; it refuses to run if Rewind is
+   already installed, and removes what it created.
 
-Then run it under systemd. A suitable unit is shown in
-[Server preparation](#server-preparation-for-deployyml); for a manual install,
-point `ExecStart` at `/opt/rewind/rewind`. Mount the music drive as described
-in [library.md](library.md). Rewind starts loopback-only: use it from the
-server itself, through an SSH tunnel (`ssh -L 8090:127.0.0.1:8090
-you@server`), or enable one of the layouts in
-[Network access](#network-access).
+`RELEASE_CHECK_BINARY_ONLY=1` skips the source and LGPL archives, which
+lets it run with uncommitted changes.
 
-**Upgrading:** replace the binary, then `sudo systemctl restart rewind`.
-Database migrations run automatically on start. **Back up the database
-first** (see `architecture.md`, "Backup and restore"): an older binary
-refuses to open a database that a newer version has migrated.
+**Record for Phase 12 (2026-10-12).** Run on a development machine, not on
+GitHub. Linux checks ran in WSL2 Ubuntu 26.04 (kernel 6.6, systemd 259,
+Go 1.27.2, Node.js 24.12.0), on a committed copy of the working tree:
+
+| Check | Result |
+| --- | --- |
+| `release-check.sh v0.0.3-check.1`: gofmt, tidy, `go mod verify`, vet, `go test -race ./...`, `npm run check`, `npm test` (182 tests), release build, `rewind_embed` tests, smoke test, full packaging with LGPL sources, `sha256sum -c`, smoke test of the archived binary, `sh -n` | passed |
+| LGPL source downloads (TagLib, utfcpp) against their pinned SHA-256 | matched |
+| `install-test.sh` as root (21 checks: install, setup, scan and stream under the hardened unit, a late mount, refused tampered and mismatched archives, upgrade with backup, rollback, clean stop), from a v0.0.1 archive to v0.0.3 | passed; nothing was left on the machine |
+| Go tests, vet, frontend check and tests, on Windows 11 | passed |
+| `govulncheck` v1.9.0 (source mode) | no vulnerability affecting Rewind. It lists GO-2026-5932 (`x/crypto/openpgp`), whose package is not linked: only `argon2` and `blake2b` are. Binary mode reports it as affecting the binary, because the stripped release binary has no symbol table. |
+| `npm audit` (build-time dependencies only) | 0 vulnerabilities |
+| shellcheck | **not run** (not installed) |
+| `ci.yml`, `release.yml` and `deploy.yml` on GitHub | **not run yet** |
+| Ubuntu 24.04, Debian 12 and 13, a real USB drive, real browsers, LAN, Tailscale, `tailscale serve` | **not tested** |
+
+Two details are specific to WSL. `/` is not a shared mount there, so a
+drive mounted after start never reaches a sandboxed service; the test uses
+a folder under `/run`, which is shared. The race detector worked because
+WSL had gcc installed.
+
+## Installing a release
+
+See [install.md](install.md): `install.sh install`, or the equivalent manual
+steps. Upgrades, rollback and backups are in [operations.md](operations.md).
+`install.sh` and `deploy.yml` use the same layout (`/opt/rewind/releases/`,
+`/opt/rewind/current`, `/etc/rewind/rewind.env`, `/var/lib/rewind`), so a
+server installed with `install.sh` can later be deployed to by the workflow,
+once the [server preparation](#server-preparation-for-deployyml) below is
+done. For that, give the deploy user ownership of the deployment
+directories, non-recursively: `sudo chown rewind-deploy /opt/rewind
+/opt/rewind/releases`.
 
 ## Network access
 
@@ -290,8 +350,12 @@ REWIND_COOKIE_SECURE=false
   Rewind (and run setup or the deployment health check).
 - The listen IP itself is trusted automatically; names must be listed.
 - The Tailscale address must exist when Rewind starts, otherwise Rewind
-  exits with "cannot listen on …". In the systemd unit, add
-  `After=tailscaled.service` and `Wants=tailscaled.service` under `[Unit]`.
+  exits with "cannot listen on …". Add `After=tailscaled.service` and
+  `Wants=tailscaled.service` under `[Unit]` in a drop-in
+  (`sudo systemctl edit rewind`). The unit's `Restart=on-failure` retries
+  if the address appears a little later.
+- For a LAN address (layout C), add `After=network-online.target` and
+  `Wants=network-online.target` the same way.
 - Rewind prints a startup warning about plain HTTP. Over Tailscale the
   tunnel is encrypted, so this is expected.
 
@@ -589,30 +653,15 @@ variables to match.
    deployment health check uses it); add remote access only as described in
    [Network access](#network-access).
 
-4. **systemd unit** `/etc/systemd/system/rewind.service` (example):
-
-   ```ini
-   [Unit]
-   Description=Rewind music server
-   After=network.target
-
-   [Service]
-   User=rewind
-   Group=rewind
-   EnvironmentFile=/etc/rewind/rewind.env
-   ExecStart=/opt/rewind/current/rewind
-   Restart=on-failure
-   NoNewPrivileges=true
-   ProtectSystem=strict
-   ReadWritePaths=/var/lib/rewind
-   PrivateTmp=true
-
-   [Install]
-   WantedBy=multi-user.target
-   ```
-
-   `ProtectSystem=strict` makes everything except `/var/lib/rewind` read-only
-   for Rewind, including the music mount.
+4. **systemd unit** `/etc/systemd/system/rewind.service`: use
+   [`release/rewind.service`](../release/rewind.service), which is also
+   included in every release archive as `rewind.service`. Its `ExecStart` is
+   `/opt/rewind/current/rewind`, as the preflight check requires. It runs
+   as `rewind` with `ProtectSystem=strict`, so everything except
+   `/var/lib/rewind` is read-only for Rewind, including the music mount.
+   It also uses `PrivateTmp`, and restricts kernel access, namespaces,
+   capabilities and address families. Change it with
+   `sudo systemctl edit rewind`.
 
 5. **Restart permission:** allow exactly one command, with `sudo visudo -f
    /etc/sudoers.d/rewind-deploy`:

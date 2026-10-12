@@ -5,17 +5,22 @@
 # GOOS=linux GOARCH=amd64). Produces in OUTDIR:
 #
 #   rewind-<version>-linux-amd64.tar.gz   binary, LICENSE, notices, docs,
-#                                         configuration example
+#                                         configuration template, systemd unit
 #   rewind-<version>-source.tar.gz        Rewind source at the release commit
 #   rewind-<version>-lgpl-sources.tar.gz  LGPL corresponding source (go-taglib,
 #                                         TagLib, utfcpp) and relink notes
+#   install.sh                            installer (scripts/install.sh)
 #   SHA256SUMS                            checksums of the files above
 #
 # Files are copied from an explicit allowlist; the archives are then checked
 # for anything that must never be published (.env files, databases, keys,
-# audio files).
+# audio files) and for the files an installation needs.
 #
 # Usage: scripts/package-release.sh VERSION [OUTDIR]
+#   PACKAGE_BINARY_ONLY=1  test mode for scripts/install-test.sh: builds only
+#                          the binary archive and install.sh (SHA256SUMS lists
+#                          just those), and allows uncommitted changes. Never
+#                          use it for a release.
 # Requires: Linux (as in the release workflow; file modes must be real), go,
 # git, GNU tar, gzip, sha256sum, curl, and web/node_modules (npm ci).
 set -eu
@@ -27,7 +32,8 @@ cd "$(dirname "$0")/.."
 case "$version" in
 *[!A-Za-z0-9._+-]*) echo "package-release: invalid version '$version'" >&2; exit 1 ;;
 esac
-if [ -n "$(git status --porcelain --untracked-files=no)" ]; then
+binary_only=${PACKAGE_BINARY_ONLY:-}
+if [ -z "$binary_only" ] && [ -n "$(git status --porcelain --untracked-files=no)" ]; then
 	echo "package-release: the working tree has uncommitted changes; release from a clean checkout" >&2
 	exit 1
 fi
@@ -55,9 +61,11 @@ mkdir -p "$stage/docs"
 
 cp "$bin" "$stage/rewind"
 chmod 0755 "$stage/rewind"
-cp LICENSE README.md "$stage/"
-cp .env.example "$stage/rewind.env.example"
-cp docs/deployment.md docs/library.md docs/api.md "$stage/docs/"
+cp LICENSE README.md CHANGELOG.md SECURITY.md "$stage/"
+cp release/rewind.env "$stage/rewind.env.example"
+cp release/rewind.service "$stage/rewind.service"
+cp docs/install.md docs/configuration.md docs/operations.md docs/library.md \
+	docs/deployment.md docs/api.md docs/themes.md docs/plugins.md "$stage/docs/"
 sh scripts/third-party.sh "$stage" "$bin"
 
 epoch=${SOURCE_DATE_EPOCH:-$(git log -1 --format=%ct)}
@@ -73,11 +81,27 @@ case "$mode" in
 	;;
 esac
 
-git archive --format=tar --prefix="rewind-$version/" HEAD | gzip -n -9 >"$outdir/rewind-$version-source.tar.gz"
-sh scripts/lgpl-sources.sh "$outdir/rewind-$version-lgpl-sources.tar.gz"
+# Everything install.sh and a manual installation need.
+for f in rewind rewind.service rewind.env.example LICENSE THIRD_PARTY_NOTICES.md \
+	LICENSES/go.senan.xyz/taglib/LICENSE LICENSES/github.com/tetratelabs/wazero/NOTICE docs/install.md; do
+	tar -tzf "$outdir/$name.tar.gz" "$name/$f" >/dev/null 2>&1 || {
+		echo "package-release: $name.tar.gz is missing $f" >&2
+		exit 1
+	}
+done
+
+cp scripts/install.sh "$outdir/install.sh"
+archives="$outdir/$name.tar.gz"
+sums_files="$name.tar.gz install.sh"
+if [ -z "$binary_only" ]; then
+	git archive --format=tar --prefix="rewind-$version/" HEAD | gzip -n -9 >"$outdir/rewind-$version-source.tar.gz"
+	sh scripts/lgpl-sources.sh "$outdir/rewind-$version-lgpl-sources.tar.gz"
+	archives="$archives $outdir/rewind-$version-source.tar.gz"
+	sums_files="$name.tar.gz rewind-$version-source.tar.gz rewind-$version-lgpl-sources.tar.gz install.sh"
+fi
 
 # Nothing private may be published.
-for archive in "$outdir/$name.tar.gz" "$outdir/rewind-$version-source.tar.gz"; do
+for archive in $archives; do
 	bad=$(tar -tzf "$archive" | grep -E -i '(^|/)\.env($|\.)|\.db($|-)|\.sqlite3?$|setup-code$|id_(rsa|ed25519|ecdsa)|\.pem$|\.key$|\.(mp3|flac|m4a|ogg|oga|wav|opus)$' | grep -v -E '(^|/)\.env\.example$' || true)
 	if [ -n "$bad" ]; then
 		echo "package-release: refusing to publish $archive; it contains:" >&2
@@ -86,6 +110,7 @@ for archive in "$outdir/$name.tar.gz" "$outdir/rewind-$version-source.tar.gz"; d
 	fi
 done
 
-(cd "$outdir" && sha256sum "$name.tar.gz" "rewind-$version-source.tar.gz" "rewind-$version-lgpl-sources.tar.gz" >SHA256SUMS)
+# shellcheck disable=SC2086 # sums_files is a list of plain file names
+(cd "$outdir" && sha256sum $sums_files >SHA256SUMS && sha256sum -c --quiet SHA256SUMS)
 echo "package-release: wrote $outdir:"
 cat "$outdir/SHA256SUMS"

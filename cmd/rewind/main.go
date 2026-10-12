@@ -21,6 +21,7 @@ import (
 	"github.com/shamil-tp/rewind/internal/config"
 	"github.com/shamil-tp/rewind/internal/db"
 	"github.com/shamil-tp/rewind/internal/library"
+	"github.com/shamil-tp/rewind/internal/metadata"
 	"github.com/shamil-tp/rewind/internal/plugin"
 	"github.com/shamil-tp/rewind/internal/prefs"
 	"github.com/shamil-tp/rewind/internal/server"
@@ -52,6 +53,15 @@ func run(ctx context.Context, getenv func(string) string, logOut io.Writer) erro
 	}
 	logger := newLogger(cfg, logOut)
 	logger.Info("starting rewind", "version", version, "frontend_embedded", web.Embedded, "data_dir", cfg.DataDir)
+
+	// Before anything reads metadata: the metadata library keeps compiled
+	// code in the temporary directory, which must not be a shared one.
+	// Removed after the scanner has stopped (defers run in reverse).
+	cleanupTemp, err := metadata.UsePrivateTempDir()
+	if err != nil {
+		return err
+	}
+	defer cleanupTemp()
 
 	created, err := db.EnsureDir(cfg.DataDir)
 	if err != nil {

@@ -1,0 +1,64 @@
+# Rewind music server: systemd unit for a native Linux installation.
+#
+# Installed as /etc/systemd/system/rewind.service by install.sh (only when
+# no unit exists yet), or copied there by hand. Paths match the documented
+# layout (docs/install.md):
+#   /opt/rewind/current/rewind   active release (symlink to releases/<version>)
+#   /etc/rewind/rewind.env       configuration (environment variables)
+#   /var/lib/rewind              data directory: database, setup code
+#
+# Adjust it with `sudo systemctl edit rewind` (a drop-in) rather than editing
+# this file, so upgrades never have to touch your changes.
+
+[Unit]
+Description=Rewind music server
+Documentation=https://github.com/shamil-tp/rewind/blob/main/docs/install.md
+After=network.target
+# Stop restarting after 5 failed starts within 2 minutes (for example, an
+# invalid setting); `systemctl status rewind` then shows the failure.
+StartLimitIntervalSec=120
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=rewind
+Group=rewind
+EnvironmentFile=/etc/rewind/rewind.env
+WorkingDirectory=/var/lib/rewind
+ExecStart=/opt/rewind/current/rewind
+# Rewind shuts down gracefully on SIGTERM (systemd's default stop signal).
+Restart=on-failure
+RestartSec=5
+UMask=0077
+
+# Hardening. Everything except the data directory is read-only for Rewind,
+# including the music folders, which it only ever reads. A drive mounted
+# while Rewind runs becomes visible to it through systemd's mount
+# propagation. If a rescan does not find it, restart Rewind.
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/rewind
+ProtectHome=read-only
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+SystemCallArchitectures=native
+CapabilityBoundingSet=
+# MemoryDenyWriteExecute is not set: the metadata reader runs TagLib as
+# WebAssembly, compiled to machine code at run time. With the option it
+# still works, but falls back to an interpreter, which made scans take about
+# twice as long and twice the CPU in a test. Add it in a drop-in if you
+# prefer that trade-off.
+
+[Install]
+WantedBy=multi-user.target
