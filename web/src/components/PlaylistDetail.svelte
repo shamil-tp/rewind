@@ -323,6 +323,7 @@
     margin-top: var(--rw-space-4);
     padding: var(--rw-space-4);
     border: var(--rw-border);
+    border-radius: var(--rw-radius-lg);
   }
 
   .confirm {
@@ -370,6 +371,7 @@
     gap: var(--rw-space-2);
     border-bottom: 1px solid var(--rw-color-surface);
     border-left: var(--rw-border-width) solid transparent;
+    border-radius: var(--rw-radius-sm);
   }
 
   .entry.current {
@@ -429,6 +431,7 @@
   .marker {
     flex: none;
     padding: 0 var(--rw-space-1);
+    border-radius: var(--rw-radius-xs);
     background: var(--rw-color-accent);
     color: var(--rw-color-on-accent);
     font-family: var(--rw-font-mono);
@@ -447,6 +450,7 @@
     margin-right: var(--rw-space-2);
     padding: 0 var(--rw-space-1);
     border: 1px solid var(--rw-color-danger);
+    border-radius: var(--rw-radius-xs);
     font-size: 0.7rem;
     text-transform: uppercase;
   }
@@ -467,7 +471,7 @@
   }
 
   .tools button:hover:not(:disabled) {
-    color: var(--rw-color-accent);
+    color: var(--rw-color-primary);
   }
 
   .tools button:disabled {

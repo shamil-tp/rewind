@@ -187,6 +187,7 @@
     padding: var(--rw-space-3);
     border-bottom: 1px solid var(--rw-color-surface);
     border-left: var(--rw-border-width) solid transparent;
+    border-radius: var(--rw-radius-sm);
     color: var(--rw-color-text);
     text-decoration: none;
   }

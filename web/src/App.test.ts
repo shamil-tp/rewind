@@ -143,7 +143,7 @@ describe('App', () => {
     // theme ID and an optional color, nothing about the account or session.
     await vi.waitFor(() => expect(localStorage.getItem('rewind.theme')).not.toBeNull())
     expect(Object.keys(localStorage)).toEqual(['rewind.theme'])
-    expect(JSON.parse(localStorage.getItem('rewind.theme')!)).toEqual({ theme: 'rewind-dark', accent: '' })
+    expect(JSON.parse(localStorage.getItem('rewind.theme')!)).toEqual({ theme: 'rewind-dark', primary: '', secondary: '', accent: '' })
     const stored = localStorage.getItem('rewind.theme')!
     for (const secret of ['owner', 'correct horse', 'session', 'token']) expect(stored).not.toContain(secret)
     expect(sessionStorage.length).toBe(0)

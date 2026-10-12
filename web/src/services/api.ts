@@ -339,8 +339,12 @@ export interface Preferences {
    * themeById falls back to the default.
    */
   theme: string
-  /** "" for the theme's accent, or a custom "#rrggbb" accent. */
+  /** "" for the theme's accent, or a custom "#rrggbb" accent (highlights). */
   accent_color: string
+  /** "" for the theme's (or the custom accent), or a custom "#rrggbb" primary color. */
+  primary_color: string
+  /** "" for the theme's, or a custom "#rrggbb" secondary color. */
+  secondary_color: string
 }
 
 export const DEFAULT_PREFERENCES: Preferences = {
@@ -348,6 +352,8 @@ export const DEFAULT_PREFERENCES: Preferences = {
   autoplay_next: true,
   theme: 'rewind-dark',
   accent_color: '',
+  primary_color: '',
+  secondary_color: '',
 }
 
 export async function getPreferences(signal?: AbortSignal): Promise<Preferences> {

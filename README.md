@@ -18,12 +18,14 @@ service and no telemetry.
   Rescans are incremental. Unplugging the drive keeps the library and
   playlists.
 - **Web player:** browse, search and sort the library, and stream with
-  seeking (HTTP Range). The browser plays the original files; nothing is
+  seeking (HTTP Range), from a floating mini player that opens a full Now
+  Playing screen. The browser plays the original files; nothing is
   transcoded.
 - **Playlists**, played in order with previous and next. Preferences are
   saved per account.
-- **Themes:** Rewind Dark (dark neo-brutalist, the default), Light, OLED
-  Black, and a custom accent color with contrast checks.
+- **Themes:** Rewind Dark (rounded neo-brutalist, the default), Light, OLED
+  Black, and your own primary, secondary and accent colors with contrast
+  checks and a live preview.
 - **Installable web app (PWA)** over HTTPS or on localhost. Only the
   interface is cached: music, library data and sign-in are never stored on
   the device.

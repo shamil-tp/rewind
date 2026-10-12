@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from '@testing-library/svelte'
+import { fireEvent, render, screen, within } from '@testing-library/svelte'
 import { describe, expect, it, vi } from 'vitest'
 import type { Track } from '../services/api'
 import { mockFetch } from '../test/fetch'
@@ -255,5 +255,145 @@ describe('Player', () => {
 
     audioOf(container).dispatchEvent(new Event('ended'))
     expect(onEnded).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('Player: Now Playing screen', () => {
+  const open = () => screen.getByRole('button', { name: /^Open Now Playing/ })
+  const dialog = (name = 'Song 1') => screen.getByRole('dialog', { name })
+
+  it('opens from the mini player without touching playback', async () => {
+    const media = stubMedia()
+    const onExpandedChange = vi.fn()
+    const { container } = render(Player, { props: { track: track(1), onUnauthorized: vi.fn(), onExpandedChange } })
+    await screen.findByRole('button', { name: 'Pause' })
+    const audio = audioOf(container)
+    const src = audio.getAttribute('src')
+    const loads = media.load.mock.calls.length
+
+    expect(open().getAttribute('aria-expanded')).toBe('false')
+    await fireEvent.click(open())
+    const d = dialog()
+    expect(d.getAttribute('aria-modal')).toBe('true')
+    expect(within(d).getByRole('heading', { name: 'Song 1' })).toBeTruthy()
+    expect(within(d).getByText('Band')).toBeTruthy()
+    expect(within(d).getByText('Record')).toBeTruthy()
+    expect(within(d).getByText('Now playing')).toBeTruthy()
+    // Still one element, same source, not paused or reloaded.
+    expect(audioOf(container)).toBe(audio)
+    expect(audio.getAttribute('src')).toBe(src)
+    expect(media.pause).not.toHaveBeenCalled()
+    expect(media.load.mock.calls.length).toBe(loads)
+    expect(onExpandedChange).toHaveBeenLastCalledWith(true)
+    expect(document.documentElement.classList.contains('rw-no-scroll')).toBe(true)
+    expect((container.querySelector('section.playbar') as HTMLElement).inert).toBe(true)
+    await vi.waitFor(() => expect(document.activeElement).toBe(within(d).getByRole('button', { name: 'Close Now Playing' })))
+  })
+
+  it('shows the same position and play state as the mini player, and controls the same element', async () => {
+    const media = stubMedia()
+    const { container } = render(Player, { props: { track: track(1), onUnauthorized: vi.fn() } })
+    const audio = audioOf(container)
+    const state = controllable(audio)
+    await screen.findByRole('button', { name: 'Pause' })
+    state.currentTime = 62
+    await fireEvent(audio, new Event('timeupdate'))
+    await fireEvent.click(open())
+    const d = dialog()
+    expect(within(d).getByLabelText('Elapsed time').textContent).toBe('1:02')
+    expect(within(d).getByLabelText('Duration').textContent).toBe('3:20')
+
+    await fireEvent.input(within(d).getByLabelText('Seek'), { target: { value: '150' } })
+    expect(state.currentTime).toBe(150)
+    expect(within(d).getByLabelText('Elapsed time').textContent).toBe('2:30')
+
+    await fireEvent.click(within(d).getByRole('button', { name: 'Pause' }))
+    expect(media.pause).toHaveBeenCalledTimes(1)
+    expect(within(d).getByRole('button', { name: 'Play' })).toBeTruthy()
+
+    // Collapsing keeps everything: the mini player shows the new position and state.
+    await fireEvent.click(within(d).getByRole('button', { name: 'Close Now Playing' }))
+    expect(screen.queryByRole('dialog')).toBeNull()
+    const bar = container.querySelector('section.playbar') as HTMLElement
+    expect(within(bar).getByLabelText('Elapsed time').textContent).toBe('2:30')
+    expect(within(bar).getByRole('button', { name: 'Play' })).toBeTruthy()
+    expect(state.currentTime).toBe(150)
+    expect(media.pause).toHaveBeenCalledTimes(1)
+  })
+
+  it('closes with Escape, returning focus to the mini player', async () => {
+    stubMedia()
+    const onExpandedChange = vi.fn()
+    const { container } = render(Player, { props: { track: track(1), onUnauthorized: vi.fn(), onExpandedChange } })
+    await fireEvent.click(open())
+    await fireEvent.keyDown(dialog(), { key: 'Escape' })
+    expect(screen.queryByRole('dialog')).toBeNull()
+    await vi.waitFor(() => expect(document.activeElement).toBe(open()))
+    expect(onExpandedChange).toHaveBeenLastCalledWith(false)
+    expect(document.documentElement.classList.contains('rw-no-scroll')).toBe(false)
+    expect((container.querySelector('section.playbar') as HTMLElement).inert).toBe(false)
+  })
+
+  it('keeps keyboard focus inside while open', async () => {
+    stubMedia()
+    render(Player, { props: { track: track(1), onUnauthorized: vi.fn() } })
+    await fireEvent.click(open())
+    const d = dialog()
+    const close = within(d).getByRole('button', { name: 'Close Now Playing' })
+    const play = within(d).getByRole('button', { name: /^(Play|Pause)$/ })
+    play.focus()
+    await fireEvent.keyDown(d, { key: 'Tab' })
+    expect(document.activeElement).toBe(close)
+    await fireEvent.keyDown(d, { key: 'Tab', shiftKey: true })
+    expect(document.activeElement).toBe(play)
+  })
+
+  it('offers previous and next only while a playlist plays', async () => {
+    stubMedia()
+    const onNext = vi.fn()
+    const p = { track: track(1), onUnauthorized: vi.fn() }
+    const { rerender } = render(Player, { props: p })
+    await fireEvent.click(open())
+    expect(within(dialog()).queryByRole('button', { name: 'Previous track' })).toBeNull()
+    expect(within(dialog()).queryByRole('button', { name: 'Next track' })).toBeNull()
+
+    await rerender({ ...p, sequence: { label: 'Mix · 1 of 3', hasPrevious: false, hasNext: true, onPrevious: vi.fn(), onNext } })
+    const d = dialog()
+    expect((within(d).getByRole('button', { name: 'Previous track' }) as HTMLButtonElement).disabled).toBe(true)
+    await fireEvent.click(within(d).getByRole('button', { name: 'Next track' }))
+    expect(onNext).toHaveBeenCalledTimes(1)
+    expect(within(d).getByText('Mix · 1 of 3')).toBeTruthy()
+  })
+
+  it('follows a track change while open, and closes when the track is cleared', async () => {
+    stubMedia()
+    const p = { track: track(1), onUnauthorized: vi.fn() }
+    const { rerender } = render(Player, { props: p })
+    await fireEvent.click(open())
+    await rerender({ ...p, track: track(2, { artist: undefined, album: undefined }) })
+    expect(within(dialog('Song 2')).getByText('Unknown artist')).toBeTruthy()
+    await rerender({ ...p, track: null })
+    expect(screen.queryByRole('dialog')).toBeNull()
+    expect(document.documentElement.classList.contains('rw-no-scroll')).toBe(false)
+  })
+
+  it('opens when the track info is pulled up, and closes when the header is pulled down', async () => {
+    stubMedia()
+    render(Player, { props: { track: track(1), onUnauthorized: vi.fn() } })
+    await fireEvent.pointerDown(open(), { clientY: 300 })
+    await fireEvent.pointerUp(open(), { clientY: 200 })
+    expect(dialog()).toBeTruthy()
+    // A short movement does not close it, and a pull that starts outside the
+    // header (for example on the seek bar) is ignored.
+    const head = dialog().querySelector('.screen-head') as HTMLElement
+    await fireEvent.pointerDown(head, { clientY: 100 })
+    await fireEvent.pointerUp(head, { clientY: 110 })
+    const seekBar = within(dialog()).getByLabelText('Seek')
+    await fireEvent.pointerDown(seekBar, { clientY: 100 })
+    await fireEvent.pointerUp(seekBar, { clientY: 300 })
+    expect(screen.queryByRole('dialog')).not.toBeNull()
+    await fireEvent.pointerDown(head, { clientY: 100 })
+    await fireEvent.pointerUp(head, { clientY: 200 })
+    expect(screen.queryByRole('dialog')).toBeNull()
   })
 })

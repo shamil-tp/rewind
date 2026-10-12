@@ -198,3 +198,41 @@ func TestThemesMatchFrontend(t *testing.T) {
 		t.Errorf("default theme differs between server (%q) and web UI", Defaults().Theme)
 	}
 }
+
+func TestPrimaryAndSecondaryColors(t *testing.T) {
+	s, conn, u := newStore(t)
+	// A user who saved only an accent before these keys existed: the row is
+	// read as before, and the new colors default to "" (theme's).
+	if _, err := conn.Exec(`INSERT INTO user_preferences (user_id, key, value, updated_at) VALUES (?, 'accent_color', '"#ff8800"', 1)`, u); err != nil {
+		t.Fatal(err)
+	}
+	if p, err := s.Get(bg, u); err != nil || p.AccentColor != "#ff8800" || p.PrimaryColor != "" || p.SecondaryColor != "" {
+		t.Fatalf("existing accent = %+v, %v", p, err)
+	}
+
+	p, err := s.Update(bg, u, raw(map[string]any{"primary_color": "#3a1fd6", "secondary_color": "#262626"}))
+	if err != nil || p.PrimaryColor != "#3a1fd6" || p.SecondaryColor != "#262626" || p.AccentColor != "#ff8800" {
+		t.Fatalf("Update = %+v, %v; the saved accent must be kept", p, err)
+	}
+
+	for _, key := range []string{"primary_color", "secondary_color"} {
+		for _, bad := range []any{"red", "#FFF", "#ff8800aa", "url(x)", "#ff8800;}body{display:none", 1, nil} {
+			var in *InputError
+			if _, err := s.Update(bg, u, raw(map[string]any{key: bad})); !errors.As(err, &in) {
+				t.Errorf("%s=%v: error = %v, want InputError", key, bad, err)
+			}
+		}
+	}
+	// One invalid value rejects the whole request.
+	if _, err := s.Update(bg, u, raw(map[string]any{"accent_color": "#00ff00", "primary_color": "blue"})); err == nil {
+		t.Error("mixed valid and invalid colors were accepted")
+	}
+	if p, _ := s.Get(bg, u); p.AccentColor != "#ff8800" || p.PrimaryColor != "#3a1fd6" || p.SecondaryColor != "#262626" {
+		t.Errorf("after rejected updates = %+v", p)
+	}
+
+	p, err = s.Update(bg, u, raw(map[string]any{"primary_color": "", "secondary_color": "", "accent_color": ""}))
+	if err != nil || p != Defaults() {
+		t.Errorf("reset = %+v, %v; want defaults", p, err)
+	}
+}

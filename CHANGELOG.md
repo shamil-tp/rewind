@@ -29,8 +29,15 @@ The first public release. Nothing has been released yet.
   audio with HTTP Range support for seeking. No transcoding.
 - **Playlists and preferences:** create, rename, reorder and delete
   playlists, and play them in order with previous and next.
-- **Themes:** Rewind Dark (the default), Light, OLED Black, and a custom
-  accent color with contrast checks.
+- **Themes:** Rewind Dark (the default), Light, OLED Black, and custom
+  primary, secondary and accent colors with contrast checks and a live
+  preview. A saved accent color keeps its look: an unchosen primary follows
+  it.
+- **Rounded neo-brutalist design:** 2px borders and shared corner-radius
+  tokens for buttons, inputs, panels, the player and artwork.
+- **Now Playing screen:** opens from the floating mini player (click, tap or
+  pull up), with large artwork placeholder, track details, seeking and the
+  same controls, sharing the mini player's audio element and state.
 - **Installable web app (PWA)** over HTTPS or on localhost. Only the
   interface is cached; music, account data and API responses never are.
 - **Opt-in network access:** HTTPS through `tailscale serve` (recommended),

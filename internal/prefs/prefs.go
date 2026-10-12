@@ -30,15 +30,24 @@ type Preferences struct {
 	AutoplayNext bool `json:"autoplay_next"`
 	// Theme is the ID of a built-in color theme (web/src/services/themes.ts).
 	Theme string `json:"theme"`
-	// AccentColor replaces the theme's accent when set: "" (use the theme's)
-	// or a lower-case "#rrggbb" color. The web UI also checks its contrast
-	// against the theme in use and ignores it where it would be unreadable.
+	// AccentColor replaces the theme's accent (progress, playing markers,
+	// focus ring) when set: "" (use the theme's) or a lower-case "#rrggbb"
+	// color. The web UI also checks its contrast against the theme in use and
+	// ignores it where it would be unreadable.
 	AccentColor string `json:"accent_color"`
+	// PrimaryColor replaces the theme's primary color (main buttons, links,
+	// selected navigation); same format and checks as AccentColor. While it
+	// is "", the web UI uses a custom accent for it, as before this key
+	// existed.
+	PrimaryColor string `json:"primary_color"`
+	// SecondaryColor replaces the theme's secondary color (secondary buttons
+	// and supporting surfaces); same format.
+	SecondaryColor string `json:"secondary_color"`
 }
 
 // Defaults returns the values used when nothing was saved.
 func Defaults() Preferences {
-	return Preferences{LibrarySort: "artist", AutoplayNext: true, Theme: "rewind-dark", AccentColor: ""}
+	return Preferences{LibrarySort: "artist", AutoplayNext: true, Theme: "rewind-dark"}
 }
 
 // LibrarySorts lists the accepted library_sort values.
@@ -48,10 +57,20 @@ var LibrarySorts = []string{"artist", "album", "title", "added", "year", "durati
 // in web/src/services/themes.ts; TestThemesMatchFrontend checks this.
 var Themes = []string{"rewind-dark", "light", "oled-black"}
 
-// accentPattern is the only accepted custom color format. Anything else,
+// colorPattern is the only accepted custom color format. Anything else,
 // including CSS keywords, functions, url() and short or upper-case hex, is
 // rejected, so the value can never be more than a color.
-var accentPattern = regexp.MustCompile(`^#[0-9a-f]{6}$`)
+var colorPattern = regexp.MustCompile(`^#[0-9a-f]{6}$`)
+
+// color validates a custom color preference: "" or "#rrggbb".
+func color(raw json.RawMessage, dst *string) error {
+	var v string
+	if err := decode(raw, &v); err != nil || (v != "" && !colorPattern.MatchString(v)) {
+		return fmt.Errorf(`must be "" or a color like "#c6ff00" (six lower-case hex digits)`)
+	}
+	*dst = v
+	return nil
+}
 
 func oneOf(raw json.RawMessage, allowed []string, dst *string) error {
 	var v string
@@ -81,12 +100,13 @@ var keys = map[string]key{
 		return oneOf(raw, Themes, &p.Theme)
 	}},
 	"accent_color": {apply: func(raw json.RawMessage, p *Preferences) error {
-		var v string
-		if err := decode(raw, &v); err != nil || (v != "" && !accentPattern.MatchString(v)) {
-			return fmt.Errorf(`must be "" or a color like "#c6ff00" (six lower-case hex digits)`)
-		}
-		p.AccentColor = v
-		return nil
+		return color(raw, &p.AccentColor)
+	}},
+	"primary_color": {apply: func(raw json.RawMessage, p *Preferences) error {
+		return color(raw, &p.PrimaryColor)
+	}},
+	"secondary_color": {apply: func(raw json.RawMessage, p *Preferences) error {
+		return color(raw, &p.SecondaryColor)
 	}},
 	"autoplay_next": {apply: func(raw json.RawMessage, p *Preferences) error {
 		var v bool

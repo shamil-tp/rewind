@@ -4,6 +4,9 @@ import {
   accentProblem,
   applyRememberedTheme,
   applyTheme,
+  applyTokens,
+  colorProblem,
+  colorWarning,
   contrast,
   DEFAULT_THEME,
   isThemeId,
@@ -67,9 +70,14 @@ describe('built-in themes', () => {
     ['text', 'surface', MIN_TEXT_CONTRAST],
     ['muted', 'bg', MIN_TEXT_CONTRAST],
     ['muted', 'surface', MIN_TEXT_CONTRAST],
-    ['accent', 'bg', MIN_TEXT_CONTRAST], // links, focus ring, selection bars
+    ['primary', 'bg', MIN_TEXT_CONTRAST], // links, selected navigation
+    ['primary', 'surface', MIN_TEXT_CONTRAST],
+    ['onPrimary', 'primary', MIN_TEXT_CONTRAST], // buttons
+    ['onSecondary', 'secondary', MIN_TEXT_CONTRAST], // secondary buttons
+    ['border', 'secondary', MIN_UI_CONTRAST], // outlines of secondary buttons
+    ['accent', 'bg', MIN_TEXT_CONTRAST], // focus ring, current-track bars
     ['accent', 'surface', MIN_TEXT_CONTRAST],
-    ['onAccent', 'accent', MIN_TEXT_CONTRAST], // buttons, "Playing" markers
+    ['onAccent', 'accent', MIN_TEXT_CONTRAST], // "Playing" markers
     ['danger', 'bg', MIN_TEXT_CONTRAST], // field errors are danger-colored text
     ['danger', 'surface', MIN_UI_CONTRAST], // badges and alert borders
     ['border', 'bg', MIN_UI_CONTRAST],
@@ -134,9 +142,17 @@ describe('custom accent', () => {
   })
 
   it('replaces the accent and its text color only when readable', () => {
+    // A primary that was never chosen follows a custom accent, as buttons did
+    // before there were separate colors.
     const ok = resolveTheme('rewind-dark', '#ff8800')
     expect(ok.accentIgnored).toBe(false)
-    expect(ok.colors).toEqual({ ...themeById('rewind-dark').colors, accent: '#ff8800', onAccent: '#000000' })
+    expect(ok.colors).toEqual({
+      ...themeById('rewind-dark').colors,
+      accent: '#ff8800',
+      onAccent: '#000000',
+      primary: '#ff8800',
+      onPrimary: '#000000',
+    })
 
     const unreadable = resolveTheme('light', '#ff8800')
     expect(unreadable.accentIgnored).toBe(true)
@@ -147,6 +163,73 @@ describe('custom accent', () => {
       expect(r.colors).toEqual(themeById('light').colors)
     }
     expect(resolveTheme('light', '').accentIgnored).toBe(false)
+  })
+})
+
+describe('primary, secondary and accent colors', () => {
+  const dark = themeById('rewind-dark')
+
+  it('defaults to the theme: primary is the theme accent, secondary its own fill', () => {
+    for (const t of THEMES) {
+      const r = resolveTheme(t.id, { primary: '', secondary: '', accent: '' })
+      expect(r.colors).toEqual(t.colors)
+      expect(r.colors.primary).toBe(t.colors.accent)
+      expect(r.ignored).toEqual([])
+    }
+  })
+
+  it('applies each chosen color independently', () => {
+    const r = resolveTheme('rewind-dark', { primary: '#80b3ff', secondary: '#004466', accent: '#ff8800' })
+    expect(r.colors).toMatchObject({
+      primary: '#80b3ff',
+      onPrimary: '#000000',
+      secondary: '#004466',
+      onSecondary: dark.colors.text, // the theme's text when readable
+      accent: '#ff8800',
+      onAccent: '#000000',
+    })
+    expect(r.ignored).toEqual([])
+  })
+
+  it('a chosen primary does not follow the accent', () => {
+    expect(resolveTheme('rewind-dark', { primary: '#80b3ff', accent: '#ff8800' }).colors.primary).toBe('#80b3ff')
+  })
+
+  it('text on a light secondary switches away from light theme text', () => {
+    const r = resolveTheme('rewind-dark', { secondary: '#eeeeee' })
+    expect(r.colors.onSecondary).toBe('#000000')
+    expect(contrast(r.colors.onSecondary, '#eeeeee')).toBeGreaterThanOrEqual(MIN_TEXT_CONTRAST)
+  })
+
+  it('primary and accent must be readable; secondary only needs the format', () => {
+    expect(colorProblem('primary', '#3a1fd6', dark)).toMatch(/Too little contrast/)
+    expect(colorProblem('accent', '#3a1fd6', dark)).toMatch(/Too little contrast/)
+    expect(colorProblem('secondary', '#3a1fd6', dark)).toBeUndefined()
+    for (const role of ['primary', 'secondary', 'accent'] as const) {
+      expect(colorProblem(role, 'red', dark), role).toMatch(/six hex digits/)
+    }
+    expect(colorWarning('secondary', '#eeeeee', dark)).toMatch(/hard to see/)
+    expect(colorWarning('secondary', '#262626', dark)).toBeUndefined()
+    expect(colorWarning('primary', '#eeeeee', dark)).toBeUndefined()
+  })
+
+  it('reports unreadable or invalid colors instead of using them', () => {
+    const r = resolveTheme('light', { primary: '#ffff00', secondary: 'url(x)', accent: '#ff8800' })
+    expect(r.ignored.sort()).toEqual(['accent', 'primary', 'secondary'])
+    expect(r.accentIgnored).toBe(true)
+    expect(r.colors).toEqual(themeById('light').colors)
+  })
+
+  it('an ignored accent does not drag the primary along', () => {
+    const r = resolveTheme('light', { accent: '#ff8800' })
+    expect(r.colors.primary).toBe(themeById('light').colors.primary)
+  })
+
+  it('sets tokens on any element, skipping anything that is not a plain color', () => {
+    const el = document.createElement('div')
+    applyTokens(el, { ...dark.colors, secondary: 'red;x:url(y)' })
+    expect(el.style.getPropertyValue('--rw-color-primary')).toBe(dark.colors.primary)
+    expect(el.style.getPropertyValue('--rw-color-secondary')).toBe('')
   })
 })
 
@@ -183,6 +266,20 @@ describe('applying themes', () => {
     rememberTheme('light', '#3a1fd6')
     applyRememberedTheme()
     expect(document.documentElement.dataset.theme).toBe('light')
+    resetDocument()
+
+    // All three colors are remembered.
+    rememberTheme('rewind-dark', { primary: '#80b3ff', secondary: '#004466', accent: '#ff8800' })
+    applyRememberedTheme()
+    expect(document.documentElement.style.getPropertyValue('--rw-color-primary')).toBe('#80b3ff')
+    expect(document.documentElement.style.getPropertyValue('--rw-color-secondary')).toBe('#004466')
+    expect(document.documentElement.style.getPropertyValue('--rw-color-accent')).toBe('#ff8800')
+    resetDocument()
+
+    // A hint written before primary and secondary existed still works.
+    localStorage.setItem('rewind.theme', '{"theme":"rewind-dark","accent":"#ff8800"}')
+    applyRememberedTheme()
+    expect(document.documentElement.style.getPropertyValue('--rw-color-primary')).toBe('#ff8800')
     resetDocument()
 
     for (const hint of ['not json', '{"theme":"evil"}', '{"theme":"light","accent":"red;x:url(y)"}', '"light"']) {

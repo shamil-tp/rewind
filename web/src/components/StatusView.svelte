@@ -276,6 +276,7 @@
   .root {
     padding: var(--rw-space-3) var(--rw-space-4);
     border-left: var(--rw-border-width) solid var(--rw-color-accent);
+    border-radius: var(--rw-radius-md);
     background: var(--rw-color-surface);
   }
 
@@ -298,6 +299,7 @@
   .pill {
     padding: 0 var(--rw-space-2);
     border: 1px solid var(--rw-color-muted);
+    border-radius: var(--rw-radius-xs);
     font-family: var(--rw-font-mono);
     font-size: 0.7rem;
     text-transform: uppercase;

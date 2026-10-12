@@ -10,7 +10,7 @@
     type User,
   } from '../services/api'
   import { nextPlayable, type Sequence } from '../services/sequence'
-  import { applyTheme, rememberTheme, resolveTheme } from '../services/themes'
+  import { applyTheme, rememberTheme, resolveTheme, type CustomColors } from '../services/themes'
   import { sentence } from '../services/validation'
   import LibraryView from './LibraryView.svelte'
   import Player from './Player.svelte'
@@ -56,6 +56,8 @@
   let playlistId = $state<number | null>(initial.playlistId)
   let currentTrack = $state<Track | null>(null)
   let playing = $state(false)
+  // While the Now Playing screen is open, the page behind it is inert.
+  let playerExpanded = $state(false)
   let libraryVersion = $state(0)
   // Views other than the library are created the first time they are opened, then kept.
   let opened = $state<Record<View, boolean>>({ library: true, playlists: false, settings: false, status: false, [initial.view]: true })
@@ -90,11 +92,21 @@
   // (and if loading fails) the theme remembered at startup stays. Settings
   // may preview a theme while saving it.
   let themePreview = $state<string | null>(null)
+  const customColors = $derived<CustomColors>({
+    primary: preferences.primary_color,
+    secondary: preferences.secondary_color,
+    accent: preferences.accent_color,
+  })
   $effect(() => {
     if (prefsStatus !== 'ready') return
-    const resolved = resolveTheme(themePreview ?? preferences.theme, preferences.accent_color)
+    const resolved = resolveTheme(themePreview ?? preferences.theme, customColors)
     applyTheme(resolved)
-    if (themePreview === null) rememberTheme(resolved.theme.id, resolved.accentIgnored ? '' : preferences.accent_color)
+    if (themePreview === null) {
+      // The hint holds only the colors actually shown with this theme.
+      const shown = { ...customColors }
+      for (const role of resolved.ignored) shown[role] = ''
+      rememberTheme(resolved.theme.id, shown)
+    }
   })
 
   // A playlist being played in order: its tracks as they were when Play was
@@ -163,9 +175,9 @@
 </script>
 
 <div class="app" class:has-player={currentTrack !== null}>
-  <a class="skip" href={`#${route === 'playlists' && playlistId !== null ? 'playlist' : route}-title`}>Skip to content</a>
+  <a class="skip" inert={playerExpanded} href={`#${route === 'playlists' && playlistId !== null ? 'playlist' : route}-title`}>Skip to content</a>
 
-  <header class="rail">
+  <header class="rail" inert={playerExpanded}>
     <p class="brand">Rewind</p>
     <nav aria-label="Main">
       <ul>
@@ -185,7 +197,7 @@
     </div>
   </header>
 
-  <main class="main">
+  <main class="main" inert={playerExpanded}>
     <!-- Views stay mounted while hidden, so switching keeps search, scroll and loaded pages. -->
     <div hidden={route !== 'library'}>
       {#if libraryStarted}
@@ -239,6 +251,7 @@
     onEnded={ended}
     onUnauthorized={expired}
     onPlayingChange={(p) => (playing = p)}
+    onExpandedChange={(e) => (playerExpanded = e)}
   />
 </div>
 
@@ -252,9 +265,9 @@
     min-height: 100dvh;
   }
 
-  /* Keep the last rows clear of the fixed playback bar. */
+  /* Keep the last rows clear of the floating playback bar. */
   .app.has-player {
-    --playbar-space: calc(6.5rem + env(safe-area-inset-bottom));
+    --playbar-space: calc(7.5rem + env(safe-area-inset-bottom));
   }
 
   .skip {
@@ -262,8 +275,9 @@
     left: -100vw;
     z-index: 20;
     padding: var(--rw-space-2) var(--rw-space-3);
-    background: var(--rw-color-accent);
-    color: var(--rw-color-on-accent);
+    border-radius: var(--rw-radius-md);
+    background: var(--rw-color-primary);
+    color: var(--rw-color-on-primary);
   }
 
   .skip:focus {
@@ -303,7 +317,8 @@
   nav a {
     display: block;
     padding: var(--rw-space-2) var(--rw-space-3);
-    border-left: var(--rw-border-width) solid transparent;
+    border: var(--rw-border-width) solid transparent;
+    border-radius: var(--rw-radius-md);
     color: var(--rw-color-muted);
     font-family: var(--rw-font-mono);
     font-weight: var(--rw-font-weight-bold);
@@ -314,12 +329,14 @@
 
   nav a:hover {
     color: var(--rw-color-text);
+    background: var(--rw-color-surface);
   }
 
-  /* The current page is marked by text weight, colour and a bar, not colour alone. */
+  /* The current page is marked by a filled shape and an arrow, not colour alone. */
   nav a[aria-current='page'] {
-    border-left-color: var(--rw-color-accent);
-    color: var(--rw-color-text);
+    border-color: var(--rw-color-border);
+    background: var(--rw-color-primary);
+    color: var(--rw-color-on-primary);
   }
 
   nav a[aria-current='page']::after {
@@ -352,7 +369,7 @@
     }
 
     .app.has-player {
-      --playbar-space: calc(9.5rem + env(safe-area-inset-bottom));
+      --playbar-space: calc(10.5rem + env(safe-area-inset-bottom));
     }
 
     .rail {
@@ -380,13 +397,7 @@
     }
 
     nav a {
-      padding: var(--rw-space-2);
-      border-left: 0;
-      border-bottom: var(--rw-border-width) solid transparent;
-    }
-
-    nav a[aria-current='page'] {
-      border-bottom-color: var(--rw-color-accent);
+      padding: var(--rw-space-1) var(--rw-space-2);
     }
 
     nav a[aria-current='page']::after {

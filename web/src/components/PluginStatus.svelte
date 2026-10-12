@@ -129,6 +129,7 @@
   .badge {
     padding: 0 var(--rw-space-1);
     border: 1px solid var(--rw-color-muted);
+    border-radius: var(--rw-radius-xs);
     font-family: var(--rw-font-mono);
     font-size: 0.7rem;
     text-transform: uppercase;

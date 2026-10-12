@@ -90,6 +90,27 @@ describe('Shell', () => {
     expect(screen.getByRole('button', { name: 'Play Song 2 by Band' }).getAttribute('aria-current')).toBe('true')
   })
 
+  it('makes the page behind the Now Playing screen inert, and keeps playing when it closes', async () => {
+    mockFetch(routes)
+    const { container } = render(Shell, { props: props() })
+    await fireEvent.click(await screen.findByRole('button', { name: 'Play Song 2 by Band' }))
+    const audio = container.querySelector('audio')!
+    const main = container.querySelector('main') as HTMLElement & { inert: boolean }
+    const rail = container.querySelector('header.rail') as HTMLElement & { inert: boolean }
+    expect(main.inert).toBe(false)
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Open Now Playing: Song 2' }))
+    expect(screen.getByRole('dialog', { name: 'Song 2' })).toBeTruthy()
+    expect(main.inert).toBe(true)
+    expect(rail.inert).toBe(true)
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Close Now Playing' }))
+    expect(main.inert).toBe(false)
+    expect(container.querySelector('audio')).toBe(audio)
+    expect(audio.getAttribute('src')).toBe('/api/tracks/2/stream')
+    expect(within(screen.getByRole('region', { name: 'Player' })).getByRole('button', { name: 'Pause' })).toBeTruthy()
+  })
+
   it('moves focus to the page heading on navigation', async () => {
     mockFetch(routes)
     render(Shell, { props: props() })
@@ -221,7 +242,41 @@ describe('Shell', () => {
       render(Shell, { props: props() })
       await vi.waitFor(() => expect(bg()).toBe('#f5f5f0'))
       expect(document.documentElement.dataset.theme).toBe('light')
-      expect(JSON.parse(localStorage.getItem('rewind.theme')!)).toEqual({ theme: 'light', accent: '' })
+      expect(JSON.parse(localStorage.getItem('rewind.theme')!)).toEqual({ theme: 'light', primary: '', secondary: '', accent: '' })
+    })
+
+    it('applies saved primary, secondary and accent colors, and remembers them', async () => {
+      mockFetch({
+        ...routes,
+        'GET /api/preferences': () =>
+          json(200, {
+            preferences: {
+              library_sort: 'artist', autoplay_next: true, theme: 'rewind-dark',
+              primary_color: '#80b3ff', secondary_color: '#004466', accent_color: '#ff8800',
+            },
+          }),
+      })
+      render(Shell, { props: props() })
+      const token = (name: string) => document.documentElement.style.getPropertyValue(name)
+      await vi.waitFor(() => expect(token('--rw-color-primary')).toBe('#80b3ff'))
+      expect(token('--rw-color-secondary')).toBe('#004466')
+      expect(token('--rw-color-accent')).toBe('#ff8800')
+      expect(JSON.parse(localStorage.getItem('rewind.theme')!)).toEqual({
+        theme: 'rewind-dark', primary: '#80b3ff', secondary: '#004466', accent: '#ff8800',
+      })
+    })
+
+    it('keeps an accent saved by an older version: buttons use it as before', async () => {
+      // A server response from before primary_color and secondary_color existed.
+      mockFetch({
+        ...routes,
+        'GET /api/preferences': () =>
+          json(200, { preferences: { library_sort: 'artist', autoplay_next: true, theme: 'rewind-dark', accent_color: '#ff8800' } }),
+      })
+      render(Shell, { props: props() })
+      const token = (name: string) => document.documentElement.style.getPropertyValue(name)
+      await vi.waitFor(() => expect(token('--rw-color-accent')).toBe('#ff8800'))
+      expect(token('--rw-color-primary')).toBe('#ff8800')
     })
 
     it('uses Rewind Dark for an unknown saved theme', async () => {

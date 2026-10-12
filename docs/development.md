@@ -221,7 +221,7 @@ scripts/build.sh     production build
 | `#/playlists/{id}` | `PlaylistDetail`: play, rename, delete, reorder, remove | `GET`, `PATCH`, `DELETE /api/playlists/{id}`, `PUT /api/playlists/{id}/tracks`, `DELETE /api/playlists/{id}/tracks/{trackId}` |
 | `#/settings` | `SettingsView`: theme, accent color, library and playback preferences; `PluginStatus` (read-only) | `PATCH /api/preferences` (loaded by `Shell` with `GET /api/preferences`), `GET /api/plugins` |
 | `#/status` | `StatusView`: overview, music folders, rescan | `GET /api/library`, `GET /api/library/roots`, `POST /api/library/scan` |
-| (always, once a track is chosen) | `Player` bottom bar, with previous/next while a playlist plays | `GET /api/tracks/{id}/stream` (via `<audio>`), `HEAD` on errors |
+| (always, once a track is chosen) | `Player`: the floating mini player, with previous/next while a playlist plays. Clicking or pulling up its track info opens the Now Playing screen, a modal view of the same `<audio>` element and state (Escape or the collapse button closes it; the rest of the page is `inert` meanwhile) | `GET /api/tracks/{id}/stream` (via `<audio>`), `HEAD` on errors |
 
 - Routing uses the URL hash, so the Go server's `index.html` fallback is not
   needed for these routes and reloading a route works in development and

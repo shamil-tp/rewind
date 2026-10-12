@@ -342,7 +342,7 @@
   .add:hover,
   .add[aria-expanded='true'] {
     background: var(--rw-color-surface);
-    color: var(--rw-color-accent);
+    color: var(--rw-color-primary);
   }
 
   .add:focus-visible {
@@ -351,8 +351,10 @@
 
   .add-panel {
     grid-column: 1 / -1;
+    margin-bottom: var(--rw-space-2);
     padding: var(--rw-space-3);
     border-left: var(--rw-border-width) solid var(--rw-color-accent);
+    border-radius: var(--rw-radius-md);
     background: var(--rw-color-surface);
   }
 
@@ -370,6 +372,7 @@
     padding: var(--rw-space-2) var(--rw-space-3);
     border: 0;
     border-left: var(--rw-border-width) solid transparent;
+    border-radius: var(--rw-radius-sm);
     background: transparent;
     color: var(--rw-color-text);
     text-align: left;
@@ -416,6 +419,7 @@
   .marker {
     flex: none;
     padding: 0 var(--rw-space-1);
+    border-radius: var(--rw-radius-xs);
     background: var(--rw-color-accent);
     color: var(--rw-color-on-accent);
     font-family: var(--rw-font-mono);
@@ -443,6 +447,7 @@
     margin-right: var(--rw-space-2);
     padding: 0 var(--rw-space-1);
     border: 1px solid var(--rw-color-danger);
+    border-radius: var(--rw-radius-xs);
     font-size: 0.7rem;
     text-transform: uppercase;
   }

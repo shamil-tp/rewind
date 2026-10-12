@@ -60,6 +60,7 @@
     height: 0.75rem;
     flex: none;
     border: 2px solid var(--rw-color-border);
+    border-radius: var(--rw-radius-round);
     background: transparent;
   }
 
@@ -79,9 +80,9 @@
     min-height: 2.75rem;
     padding: var(--rw-space-1) var(--rw-space-4);
     border: var(--rw-border);
-    border-radius: var(--rw-radius);
-    background: var(--rw-color-accent);
-    color: var(--rw-color-on-accent);
+    border-radius: var(--rw-radius-md);
+    background: var(--rw-color-primary);
+    color: var(--rw-color-on-primary);
     font-family: var(--rw-font-mono);
     font-weight: var(--rw-font-weight-bold);
     text-transform: uppercase;

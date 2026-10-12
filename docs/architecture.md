@@ -702,6 +702,31 @@ Details, the security model and the contributor guide are in
     location. That was deliberately left out (the Phase 9 brief excludes
     user stylesheets and theme downloads); the limited custom accent covers
     the common need.
+- *Implemented (UI enhancement after Phase 12): rounded neo-brutalism, Now
+  Playing, three custom colors.* No backend change except two preference
+  keys; no new dependency; no migration.
+  - **Tokens:** 2px borders and shared radius tokens (`--rw-radius-xs` to
+    `--rw-radius-xl`, `--rw-radius-art`) in `app.css`. Four color tokens
+    were added: `primary`, `on-primary`, `secondary`, `on-secondary`. The
+    accent keeps the highlight role. See [themes.md](themes.md#design-tokens).
+  - **Colors:** `primary_color` and `secondary_color` join `accent_color` in
+    `user_preferences` (same `""`/`#rrggbb` validator, no migration).
+    `resolveTheme` lets an unchosen primary follow a custom accent, so saved
+    accents look unchanged. The `rewind.theme` hint now holds the theme ID and
+    all three colors, and old hints are still read. Settings edits all three
+    with synced pickers and hex fields, previews them by setting the tokens on
+    a preview element, and saves the changed ones in one `PATCH`.
+  - **Now Playing** lives inside `Player`, as a second view of the same
+    state: one `<audio>` element, and the same `playing`, `current` and
+    `duration` values and handlers. Opening and closing changes only an
+    `expanded` flag, so playback, position and the source are untouched
+    (tested). While it is open, the mini bar and Shell's rail and main
+    content are `inert`, focus is kept inside, Escape closes it and focus
+    returns to the mini player. Pull-up and pull-down gestures count only
+    when they start on the mini player's track info or the screen's header,
+    never on the seek bar. Previous and next appear only while a playlist
+    plays. There is no artwork API, so a placeholder is shown, and there are
+    no shuffle, repeat or volume controls, because none exist.
 - *Implemented (Phase 7): installable PWA.*
   - `public/manifest.webmanifest`: `standalone`, start URL and scope `/`, dark
     background and theme colour, icons at 192 and 512 px plus a maskable

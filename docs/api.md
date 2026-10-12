@@ -537,8 +537,10 @@ Requires a session; `Cache-Control: no-store`.
 
 ```json
 {
-  "preferences": { "library_sort": "added", "autoplay_next": true, "theme": "light", "accent_color": "" },
-  "defaults": { "library_sort": "artist", "autoplay_next": true, "theme": "rewind-dark", "accent_color": "" }
+  "preferences": { "library_sort": "added", "autoplay_next": true, "theme": "light", "accent_color": "",
+                   "primary_color": "", "secondary_color": "" },
+  "defaults": { "library_sort": "artist", "autoplay_next": true, "theme": "rewind-dark", "accent_color": "",
+                "primary_color": "", "secondary_color": "" }
 }
 ```
 
@@ -551,7 +553,9 @@ upgrade) is ignored in favour of the default.
 | `library_sort` | `artist`, `album`, `title`, `added`, `year`, `duration` | `artist` | Initial sort of the library. `added` means newest first and `duration` longest first; the others are ascending. |
 | `autoplay_next` | `true`, `false` | `true` | When a playlist track ends, play the next available one. |
 | `theme` | `rewind-dark`, `light`, `oled-black` | `rewind-dark` | Color theme ([themes.md](themes.md)). |
-| `accent_color` | `""` or `#rrggbb` (six **lower-case** hex digits) | `""` | Custom accent; `""` uses the theme's. The server checks only the format; the web UI also requires 4.5:1 contrast with the theme in use and ignores an accent that falls short. |
+| `accent_color` | `""` or `#rrggbb` (six **lower-case** hex digits) | `""` | Custom accent (progress, playing markers, focus ring); `""` uses the theme's. The server checks only the format; the web UI also requires 4.5:1 contrast with the theme in use and ignores an accent that falls short. |
+| `primary_color` | `""` or `#rrggbb` | `""` | Custom primary color (main buttons, links, selected navigation). `""` uses a custom `accent_color` if one is set, otherwise the theme's. Same checks as `accent_color`. |
+| `secondary_color` | `""` or `#rrggbb` | `""` | Custom secondary color (secondary buttons, supporting surfaces). `""` uses the theme's. The server checks only the format. |
 
 ### `PATCH /api/preferences`
 
