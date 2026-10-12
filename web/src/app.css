@@ -1,0 +1,264 @@
+/*
+ * Rewind design tokens and base styles.
+ *
+ * Every color, border and spacing value used by components comes from the
+ * custom properties below, so a future theme can restyle the app by
+ * overriding them without touching component code.
+ */
+
+:root {
+  /* Color */
+  --rw-color-bg: #0b0b0b;
+  --rw-color-surface: #151515;
+  --rw-color-text: #f2f2f2;
+  --rw-color-muted: #a3a3a3;
+  --rw-color-border: #f2f2f2;
+  --rw-color-accent: #c6ff00;
+  --rw-color-on-accent: #0b0b0b;
+  --rw-color-danger: #ff5c5c;
+
+  /* Borders and shape */
+  --rw-border-width: 3px;
+  --rw-border: var(--rw-border-width) solid var(--rw-color-border);
+  --rw-radius: 0;
+  --rw-shadow-offset: 6px;
+  --rw-shadow: var(--rw-shadow-offset) var(--rw-shadow-offset) 0 0 var(--rw-color-accent);
+
+  /* Focus */
+  --rw-focus-ring: 3px solid var(--rw-color-accent);
+  --rw-focus-offset: 3px;
+
+  /* Typography: system fonts only, nothing is downloaded. */
+  --rw-font-sans: system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  --rw-font-mono: ui-monospace, 'SFMono-Regular', Menlo, Consolas, 'Liberation Mono', monospace;
+  --rw-font-size-sm: 0.875rem;
+  --rw-font-size-md: 1rem;
+  --rw-font-size-lg: 1.25rem;
+  --rw-font-size-display: clamp(2.5rem, 12vw, 5.5rem);
+  --rw-font-weight-bold: 800;
+  --rw-font-weight-black: 900;
+
+  /* Spacing */
+  --rw-space-1: 0.25rem;
+  --rw-space-2: 0.5rem;
+  --rw-space-3: 0.75rem;
+  --rw-space-4: 1rem;
+  --rw-space-5: 1.5rem;
+  --rw-space-6: 2.5rem;
+  --rw-content-max-width: 64rem;
+
+  color-scheme: dark;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  min-height: 100dvh;
+  background: var(--rw-color-bg);
+  color: var(--rw-color-text);
+  font-family: var(--rw-font-sans);
+  font-size: var(--rw-font-size-md);
+  line-height: 1.5;
+}
+
+h1,
+h2,
+h3,
+p {
+  margin: 0;
+}
+
+button {
+  font: inherit;
+  color: inherit;
+}
+
+:focus-visible {
+  outline: var(--rw-focus-ring);
+  outline-offset: var(--rw-focus-offset);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/*
+ * Shared form controls (setup and sign-in). Components use these classes so
+ * every form looks the same and follows the tokens above.
+ */
+
+.rw-form {
+  display: grid;
+  gap: var(--rw-space-4);
+}
+
+.rw-field {
+  display: grid;
+  gap: var(--rw-space-1);
+}
+
+.rw-label {
+  font-family: var(--rw-font-mono);
+  font-size: var(--rw-font-size-sm);
+  font-weight: var(--rw-font-weight-bold);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.rw-hint {
+  color: var(--rw-color-muted);
+  font-size: var(--rw-font-size-sm);
+}
+
+.rw-input {
+  width: 100%;
+  min-height: 2.75rem;
+  padding: var(--rw-space-2) var(--rw-space-3);
+  border: var(--rw-border);
+  border-radius: var(--rw-radius);
+  background: var(--rw-color-bg);
+  color: var(--rw-color-text);
+  font: inherit;
+}
+
+.rw-input[aria-invalid='true'] {
+  border-color: var(--rw-color-danger);
+}
+
+.rw-input:focus-visible {
+  outline: var(--rw-focus-ring);
+  outline-offset: 0;
+}
+
+.rw-field-error {
+  color: var(--rw-color-danger);
+  font-size: var(--rw-font-size-sm);
+}
+
+.rw-alert {
+  padding: var(--rw-space-3);
+  border: var(--rw-border-width) solid var(--rw-color-danger);
+  color: var(--rw-color-text);
+}
+
+.rw-notice {
+  padding: var(--rw-space-3);
+  border: var(--rw-border-width) solid var(--rw-color-accent);
+}
+
+.rw-button {
+  min-height: 2.75rem;
+  padding: var(--rw-space-2) var(--rw-space-5);
+  border: var(--rw-border);
+  border-radius: var(--rw-radius);
+  background: var(--rw-color-accent);
+  color: var(--rw-color-on-accent);
+  font-family: var(--rw-font-mono);
+  font-weight: var(--rw-font-weight-bold);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  cursor: pointer;
+}
+
+.rw-button:hover:not(:disabled) {
+  background: var(--rw-color-text);
+}
+
+.rw-button:disabled {
+  cursor: progress;
+  opacity: 0.7;
+}
+
+.rw-button-secondary {
+  background: transparent;
+  color: var(--rw-color-text);
+}
+
+.rw-button-secondary:hover:not(:disabled) {
+  color: var(--rw-color-on-accent);
+}
+
+.rw-panel {
+  display: grid;
+  gap: var(--rw-space-4);
+  padding: var(--rw-space-5);
+  border: var(--rw-border);
+  border-radius: var(--rw-radius);
+  background: var(--rw-color-surface);
+  box-shadow: var(--rw-shadow);
+}
+
+.rw-panel-title {
+  font-size: var(--rw-font-size-lg);
+  font-weight: var(--rw-font-weight-black);
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+}
+
+.rw-muted {
+  color: var(--rw-color-muted);
+}
+
+code {
+  font-family: var(--rw-font-mono);
+  font-size: 0.95em;
+  overflow-wrap: anywhere;
+}
+
+/* Page structure shared by the signed-in views. */
+
+.view-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--rw-space-2) var(--rw-space-4);
+  margin-bottom: var(--rw-space-5);
+}
+
+.view-title {
+  font-size: clamp(2rem, 6vw, 3.25rem);
+  font-weight: var(--rw-font-weight-black);
+  line-height: 1;
+  letter-spacing: -0.03em;
+  text-transform: uppercase;
+}
+
+.view-title:focus {
+  outline: none;
+}
+
+.view-title:focus-visible {
+  outline: var(--rw-focus-ring);
+}
+
+.count {
+  color: var(--rw-color-muted);
+  font-family: var(--rw-font-mono);
+  font-size: var(--rw-font-size-sm);
+}
+
+a {
+  color: var(--rw-color-accent);
+}
+
+[hidden] {
+  display: none !important;
+}

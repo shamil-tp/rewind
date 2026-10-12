@@ -1,0 +1,32 @@
+.env
+.env.local
+
+# Local environment files (keep .env.example tracked)
+.env.*
+!.env.example
+
+# Go build and test output
+/bin/
+/dist/
+*.exe
+*.test
+*.out
+coverage.*
+
+# Frontend
+web/node_modules/
+web/dist/
+web/.vite/
+
+# Application data and SQLite files
+/data/
+*.db
+*.db-wal
+*.db-shm
+*.db-journal
+
+# OS and editor files
+.DS_Store
+Thumbs.db
+.idea/
+*.swp

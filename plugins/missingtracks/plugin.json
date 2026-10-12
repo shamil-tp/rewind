@@ -1,0 +1,10 @@
+{
+  "schema": 1,
+  "id": "missing-tracks",
+  "name": "Missing tracks warning",
+  "version": "1.0.0",
+  "description": "Logs a warning when a library scan marks tracks as missing.",
+  "rewind_api": 1,
+  "capabilities": ["events.library_scan"],
+  "author": "Rewind contributors"
+}

@@ -1,0 +1,180 @@
+# Release: runs only when a version tag (v*) is pushed. It verifies the
+# tagged commit, builds the Linux amd64 binary with the frontend embedded,
+# collects license notices and LGPL sources, and publishes a GitHub Release
+# for that existing tag. It never creates or moves tags, and it does not
+# overwrite an existing release.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    name: Verify tagged commit
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    outputs:
+      version: ${{ steps.tag.outputs.version }}
+      prerelease: ${{ steps.tag.outputs.prerelease }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Validate tag
+        id: tag
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          if ! printf '%s' "$TAG" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$'; then
+            echo "::error::Tag '$TAG' is not a version like v1.2.3 or v1.2.3-rc.1"
+            exit 1
+          fi
+          # Only commits that are already on main may be released.
+          git fetch --no-tags origin main
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+            echo "::error::Tag '$TAG' points to a commit that is not on main"
+            exit 1
+          fi
+          echo "version=$TAG" >> "$GITHUB_OUTPUT"
+          case "$TAG" in
+            *-*) echo "prerelease=true" >> "$GITHUB_OUTPUT" ;;
+            *) echo "prerelease=false" >> "$GITHUB_OUTPUT" ;;
+          esac
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: false # release builds never use a shared cache
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+
+      - name: Go checks
+        run: |
+          test -z "$(gofmt -l .)" || { gofmt -l .; echo "::error::gofmt"; exit 1; }
+          go mod tidy -diff
+          go mod verify
+          go vet ./...
+          go test -race -count=1 ./...
+
+      - name: Frontend checks
+        working-directory: web
+        run: |
+          npm ci
+          npm run check
+          npm test
+
+  build:
+    name: Build and package
+    needs: verify
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+
+      - name: Build binary with embedded frontend
+        env:
+          GOOS: linux
+          GOARCH: amd64
+          VERSION: ${{ needs.verify.outputs.version }}
+        run: sh scripts/build.sh
+
+      - name: Smoke test
+        run: sh scripts/smoke-test.sh bin/rewind "${{ needs.verify.outputs.version }}"
+
+      # Fails on unreviewed dependencies, missing license files, an unreviewed
+      # go-taglib version, or LGPL source archives that do not match their
+      # pinned checksums. Nothing is published if this step fails.
+      - name: Package with notices and sources
+        env:
+          VERSION: ${{ needs.verify.outputs.version }}
+        run: |
+          go mod download
+          sh scripts/package-release.sh "$VERSION" dist
+
+      - name: Release notes
+        env:
+          VERSION: ${{ needs.verify.outputs.version }}
+        run: |
+          {
+            echo "Rewind $VERSION for **Linux x86-64 (amd64)** only."
+            echo
+            echo "| File | Contents |"
+            echo "| --- | --- |"
+            echo "| \`rewind-$VERSION-linux-amd64.tar.gz\` | binary with the web interface embedded, LICENSE, THIRD_PARTY_NOTICES.md, LICENSES/, docs, configuration example |"
+            echo "| \`rewind-$VERSION-source.tar.gz\` | Rewind source code at this tag |"
+            echo "| \`rewind-$VERSION-lgpl-sources.tar.gz\` | corresponding source for the LGPL-2.1 components (go-taglib, TagLib) and relinking instructions |"
+            echo "| \`SHA256SUMS\` | SHA-256 checksums |"
+            echo
+            echo "Verify downloads with \`sha256sum -c SHA256SUMS --ignore-missing\`. Installation and upgrade notes: \`docs/deployment.md\`."
+            echo
+            echo "Built from commit \`$GITHUB_SHA\`."
+          } > dist/RELEASE_NOTES.md
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-dist
+          path: dist/
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    name: Publish GitHub Release
+    needs: [verify, build]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write # create the release and upload assets; nothing else
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-dist
+          path: dist
+
+      - name: Verify checksums
+        working-directory: dist
+        run: sha256sum -c SHA256SUMS
+
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.verify.outputs.version }}
+          PRERELEASE: ${{ needs.verify.outputs.prerelease }}
+        working-directory: dist
+        run: |
+          flags=""
+          if [ "$PRERELEASE" = "true" ]; then flags="--prerelease"; fi
+          # --verify-tag: fail instead of creating a tag. If a release for the
+          # tag already exists, this fails rather than overwriting it.
+          gh release create "$TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --verify-tag \
+            --title "Rewind $TAG" \
+            --notes-file RELEASE_NOTES.md \
+            $flags \
+            "rewind-$TAG-linux-amd64.tar.gz" \
+            "rewind-$TAG-source.tar.gz" \
+            "rewind-$TAG-lgpl-sources.tar.gz" \
+            SHA256SUMS

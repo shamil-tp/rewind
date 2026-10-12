@@ -1,0 +1,78 @@
+/* Styles for offline.html. Kept separate because the Content Security Policy
+   forbids inline styles. Colors match the default theme in src/app.css. */
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  color-scheme: dark;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  background: #0b0b0b;
+  color: #f2f2f2;
+  font-family: system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  line-height: 1.5;
+}
+
+main {
+  max-width: 36rem;
+  padding: max(2rem, env(safe-area-inset-top)) 1.25rem 2rem;
+  margin: 0 auto;
+}
+
+.mark {
+  display: inline-block;
+  margin: 0 0 2rem;
+  padding: 0.25rem 0.5rem;
+  border: 3px solid #c6ff00;
+  color: #c6ff00;
+  font-family: ui-monospace, 'SFMono-Regular', Menlo, Consolas, 'Liberation Mono', monospace;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+h1 {
+  margin: 0 0 1rem;
+  font-size: clamp(1.75rem, 7vw, 2.5rem);
+  font-weight: 900;
+  line-height: 1.1;
+}
+
+ul {
+  padding-left: 1.25rem;
+}
+
+.note {
+  color: #a3a3a3;
+}
+
+.button {
+  display: inline-block;
+  min-height: 44px;
+  margin-top: 1rem;
+  padding: 0.6rem 1.25rem;
+  border: 3px solid #f2f2f2;
+  background: #c6ff00;
+  color: #0b0b0b;
+  font-weight: 800;
+  text-decoration: none;
+  box-shadow: 4px 4px 0 0 #f2f2f2;
+}
+
+.button:focus-visible {
+  outline: 3px solid #c6ff00;
+  outline-offset: 3px;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .button:active {
+    transform: translate(2px, 2px);
+    box-shadow: 2px 2px 0 0 #f2f2f2;
+  }
+}

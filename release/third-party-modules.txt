@@ -1,0 +1,21 @@
+# Third-party Go modules that may be linked into the Rewind binary.
+#
+# scripts/third-party.sh fails the release (and CI) if the binary links a
+# module that is not listed here, or if a listed module ships no license
+# file. Adding a line is a deliberate review step: check the module's license
+# and obligations first (see docs/deployment.md, "Release checklist").
+#
+# Format: <module path> <SPDX license> [notes]
+github.com/dustin/go-humanize                MIT
+github.com/google/uuid                       BSD-3-Clause    linked on Linux only (via modernc.org/libc)
+github.com/mattn/go-isatty                   MIT             linked on Windows builds only
+github.com/ncruces/go-strftime               MIT             linked on Windows builds only
+github.com/remyoudompheng/bigfft             BSD-3-Clause
+github.com/tetratelabs/wazero                Apache-2.0      NOTICE file must be distributed
+go.senan.xyz/taglib                          LGPL-2.1-only   binary-distribution obligations; see scripts/lgpl-sources.sh
+golang.org/x/crypto                          BSD-3-Clause
+golang.org/x/sys                             BSD-3-Clause
+modernc.org/libc                             BSD-3-Clause    includes musl (MIT) and Go-derived code; see LICENSE-3RD-PARTY.md
+modernc.org/mathutil                         BSD-3-Clause
+modernc.org/memory                           BSD-3-Clause
+modernc.org/sqlite                           BSD-3-Clause    bundles SQLite (public domain) and sqlite-vec (MIT)

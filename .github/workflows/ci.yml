@@ -1,0 +1,138 @@
+# Continuous integration: checks every pull request to main and every push to
+# main. It never deploys, publishes, or uses secrets.
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  # Superseded pull-request runs are cancelled; runs on main always finish.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  backend:
+    name: Go
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Uses the toolchain directive in go.mod.
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+
+      - name: gofmt
+        run: |
+          unformatted="$(gofmt -l .)"
+          if [ -n "$unformatted" ]; then
+            echo "::error::These files need gofmt:"
+            echo "$unformatted"
+            exit 1
+          fi
+
+      - name: go.mod and go.sum are tidy
+        run: go mod tidy -diff
+
+      - name: Verify module checksums
+        run: go mod verify
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: go test (race detector)
+        run: go test -race -count=1 ./...
+
+      - name: Build without CGO (linux/amd64)
+        env:
+          CGO_ENABLED: "0"
+          GOOS: linux
+          GOARCH: amd64
+        run: go build ./...
+
+  frontend:
+    name: Web
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install
+        run: npm ci
+
+      # package.json defines no lint script; `check` (svelte-check with
+      # --fail-on-warnings, plus tsc) is the frontend's static check.
+      - name: Type check
+        run: npm run check
+
+      - name: Test
+        run: npm test
+
+      - name: Production build
+        run: npm run build
+
+  integration:
+    name: Embedded production build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      # The same script the release and deploy workflows use: npm ci, vite
+      # build, check web/dist, then a CGO-free build with the frontend embedded.
+      - name: Build production binary
+        env:
+          GOOS: linux
+          GOARCH: amd64
+          VERSION: ci-${{ github.sha }}
+        run: sh scripts/build.sh
+
+      - name: Embedded-frontend tests
+        run: |
+          go vet -tags rewind_embed ./...
+          go test -count=1 -tags rewind_embed ./web/ ./internal/server/
+
+      - name: Smoke test the binary
+        run: sh scripts/smoke-test.sh bin/rewind "ci-${{ github.sha }}"
+
+      # Fails on unreviewed dependencies or missing license files, so problems
+      # surface before a release is attempted.
+      - name: Third-party license check
+        run: |
+          go mod download
+          sh scripts/third-party.sh "$RUNNER_TEMP/third-party" bin/rewind
