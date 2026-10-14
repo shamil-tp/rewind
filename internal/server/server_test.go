@@ -288,7 +288,13 @@ func TestServeGracefulShutdown(t *testing.T) {
 	served := make(chan error, 1)
 	go func() { served <- Serve(ctx, lns, mux, slog.New(slog.DiscardHandler)) }()
 
-	resp, err := http.Get(base + "/api/health")
+	// Without keep-alive, the client never opens a spare connection while it
+	// waits for an idle one. Shutdown keeps a connection that has not sent a
+	// request yet for up to 5 seconds, so a spare one made Serve return late
+	// and this test fail intermittently.
+	client := &http.Client{Transport: &http.Transport{DisableKeepAlives: true}}
+
+	resp, err := client.Get(base + "/api/health")
 	if err != nil {
 		t.Fatalf("GET /api/health: %v", err)
 	}
@@ -299,7 +305,7 @@ func TestServeGracefulShutdown(t *testing.T) {
 
 	slow := make(chan string, 1)
 	go func() {
-		resp, err := http.Get(base + "/slow")
+		resp, err := client.Get(base + "/slow")
 		if err != nil {
 			slow <- "error: " + err.Error()
 			return
