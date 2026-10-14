@@ -70,7 +70,11 @@ IDs is not supported yet.
 
 ### Permissions
 
-Rewind only needs to **read** the music. Recommended:
+Rewind only needs to **read** the music. The installation wizard
+(`sudo rewind-ctl --reconfigure`) checks each folder as the `rewind` user,
+explains what blocks it, and can add `rewind` to an ordinary group that
+grants access; it never changes your files' permissions
+([install.md](install.md#permissions)). Recommended:
 
 - Run Rewind as an unprivileged user. Never run it as root.
 - Mount the pendrive **read-only** and readable by that user. FAT32 and exFAT

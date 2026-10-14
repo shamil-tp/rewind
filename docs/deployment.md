@@ -99,10 +99,11 @@ corresponds to exactly one pushed tag.
 | File | Contents |
 | --- | --- |
 | `rewind-<version>-linux-amd64.tar.gz` | `rewind` (single static binary, web interface embedded), `rewind.service` (systemd unit), `rewind.env.example` (server configuration template, from `release/rewind.env`), `LICENSE`, `README.md`, `CHANGELOG.md`, `SECURITY.md`, `THIRD_PARTY_NOTICES.md`, `LICENSES/`, `docs/` (install, configuration, operations, library, deployment, api, themes, plugins) |
-| `install.sh` | the installer (`scripts/install.sh`), see [install.md](install.md) |
+| `install.sh` | the installer (`scripts/install.sh`): the interactive wizard and the scripted commands, see [install.md](install.md) |
+| `uninstall.sh` | the uninstaller (`scripts/uninstall.sh`); runs the installer's uninstall wizard |
 | `rewind-<version>-source.tar.gz` | Rewind's source at the tag (`git archive`) |
 | `rewind-<version>-lgpl-sources.tar.gz` | corresponding source for the LGPL-2.1 components and relinking instructions (see below) |
-| `SHA256SUMS` | SHA-256 checksums of the three archives and `install.sh` |
+| `SHA256SUMS` | SHA-256 checksums of the three archives, `install.sh` and `uninstall.sh` |
 
 Only **Linux x86-64 (amd64)** is built. arm64 is a future roadmap item and
 is not claimed.
@@ -225,10 +226,12 @@ release workflow run, without tagging or publishing:
    smoke test;
 5. `scripts/package-release.sh`, `sha256sum -c`, a listing of the archive,
    and a smoke test of the binary taken from the archive;
-6. `sh -n` on every script, and shellcheck if it is installed;
-7. with `RELEASE_CHECK_INSTALL=1`, `scripts/install-test.sh` through
-   `sudo`. That test changes the machine; it refuses to run if Rewind is
-   already installed, and removes what it created.
+6. `sh -n` (or `bash -n` for bash scripts) on every script, shellcheck if
+   it is installed, and `scripts/install-unit-test.sh`;
+7. with `RELEASE_CHECK_INSTALL=1`, `scripts/install-test.sh` and
+   `scripts/wizard-test.sh` through `sudo`. These tests change the machine;
+   they refuse to run if Rewind is already installed, and remove what they
+   created.
 
 `RELEASE_CHECK_BINARY_ONLY=1` skips the source and LGPL archives, which
 lets it run with uncommitted changes.
@@ -248,6 +251,26 @@ Go 1.27.2, Node.js 24.12.0), on a committed copy of the working tree:
 | shellcheck | **not run** (not installed) |
 | `ci.yml`, `release.yml` and `deploy.yml` on GitHub | **not run yet** |
 | Ubuntu 24.04, Debian 12 and 13, a real USB drive, real browsers, LAN, Tailscale, `tailscale serve` | **not tested** |
+
+**Record for the installation wizard (2026-10-14).** Run on the same
+development machine, in WSL2 Ubuntu 26.04 (systemd 259), against the
+published v1.1.0 and v1.2.0 archives (downloaded and checked with
+`sha256sum -c`), with the new `install.sh` placed next to them:
+
+| Check | Result |
+| --- | --- |
+| shellcheck 0.10.0 on every changed script (`install.sh`, `uninstall.sh`, the three installer tests, `release-check.sh`, `package-release.sh`) | no findings. `deploy-remote.sh`, unchanged, has three info-level SC2015 findings |
+| `bash -n` on `install.sh` and `uninstall.sh` | passed |
+| `install-unit-test.sh` as a normal user (validation, configuration editing, network-mode detection, drop-in, installation record, uninstall planning on a scratch tree, prompts, non-root command line) | 261 passed |
+| `install-test.sh` as root, scripted subcommands run with `sh` (re-run with bash), v1.1.0 to v1.2.0 | passed (22 checks) |
+| `wizard-test.sh` as root, with `WIZARD_TEST_DOWNLOAD=v1.1.0` (install from a local archive, group access, LAN reconfiguration, a failing reconfiguration rolled back, update, repair, all three uninstall options, reinstall over kept data, download of v1.1.0 and update to the latest release from GitHub) | passed (24 checks); nothing was left on the machine |
+| package installation through `apt-get` (no package was missing) | **not exercised** |
+| Ubuntu 24.04 (systemd 255: no `WantsMountsFor=` question), a real Ubuntu Server, a real USB drive, Tailscale modes with a real tailnet | **not tested** |
+| `release-check.sh`, the CI jobs with the new steps, packaging with `uninstall.sh` | **not run** (no Go or Node.js in that WSL distribution) |
+
+One detail came up on Ubuntu 26.04: its `/usr/bin/test` (rust-coreutils)
+ignores supplementary groups for `-r` and `-x`, so the installer checks
+folder access with bash's built-in `test`, which asks the kernel.
 
 Two details are specific to WSL. `/` is not a shared mount there, so a
 drive mounted after start never reaches a sandboxed service; the test uses

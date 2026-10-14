@@ -49,6 +49,30 @@ The first public release. Nothing has been released yet.
   corresponding source, `SHA256SUMS`, a systemd unit, and `install.sh` for
   installation, upgrades with a database backup, and rollback.
 
+- **Installation wizard:** `sudo bash install.sh` checks the server (Ubuntu
+  24.04 and 26.04 LTS, amd64, systemd, tools, disk space), offers to install
+  only missing packages, downloads the latest or a chosen release (or uses a
+  local archive) and verifies it against `SHA256SUMS`, then asks for network
+  access (this server only, Tailscale HTTPS, Tailscale IP or LAN IP; never
+  all interfaces or public addresses), music folders (with access checks as
+  the service user and an optional, explicit group membership), waiting for
+  music drives at boot, and other settings. It shows a summary before
+  changing anything, reports each step, and reports success only after the
+  health check passes. The scripted `install`, `upgrade`, `rollback` and
+  `status` commands still work, also with `sh`.
+- **`rewind-ctl`:** the installer installs itself as
+  `/usr/local/sbin/rewind-ctl` for `--status`, `--check`, `--update`,
+  `--reconfigure` (configuration backed up first, previous settings restored
+  if Rewind becomes unhealthy) and `--repair` (missing parts, modes, checksum
+  of the active binary).
+- **Uninstaller:** `uninstall.sh` and `rewind-ctl --uninstall` remove the
+  application only, the application and configuration, or (after typing
+  `PURGE`) also the database and service user; backups only on a separate
+  confirmation. Only the fixed installation paths and the files Rewind
+  creates are removed, never through symlinks, never anything that existed
+  before the installation (recorded in `/etc/rewind/install-manifest`), and
+  never music. Release assets now include `uninstall.sh`.
+
 ### Security
 
 - The metadata library's cache of compiled code is kept in a private

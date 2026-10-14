@@ -10,10 +10,12 @@
 # Usage: scripts/release-check.sh VERSION [OUTDIR]
 #   VERSION  the version to build, for example v0.1.0-rc.1 (nothing is tagged)
 #   OUTDIR   where the release files are written (default: dist)
-#   RELEASE_CHECK_BINARY_ONLY=1  package only the binary archive and
-#            install.sh, which also works with uncommitted changes
-#   RELEASE_CHECK_INSTALL=1      also run scripts/install-test.sh through
-#            sudo: installs, upgrades and rolls back a real systemd service.
+#   RELEASE_CHECK_BINARY_ONLY=1  package only the binary archive,
+#            install.sh and uninstall.sh, which also works with uncommitted
+#            changes
+#   RELEASE_CHECK_INSTALL=1      also run scripts/install-test.sh and
+#            scripts/wizard-test.sh through sudo: they install, upgrade, roll
+#            back, reconfigure, repair and uninstall a real systemd service.
 #            Only on a disposable machine.
 #
 # Requires: Linux amd64, Go (go.mod's toolchain), Node.js 24 with npm, git,
@@ -82,8 +84,14 @@ if [ -f "$outdir/rewind-$version-lgpl-sources.tar.gz" ]; then
 	tar -tzf "$outdir/rewind-$version-lgpl-sources.tar.gz" | sed 's/^/    /'
 fi
 
-step "Script syntax"
-for s in scripts/*.sh; do sh -n "$s"; done
+step "Script syntax and installer unit tests"
+for s in scripts/*.sh; do
+	case "$(head -n 1 "$s")" in
+	*bash*) bash -n "$s" ;;
+	*) sh -n "$s" ;;
+	esac
+done
+bash scripts/install-unit-test.sh
 if command -v shellcheck >/dev/null 2>&1; then
 	shellcheck scripts/*.sh
 else
@@ -99,6 +107,7 @@ if [ "${RELEASE_CHECK_INSTALL:-}" = 1 ]; then
 	# Restore bin/rewind for the version under test.
 	GOOS=linux GOARCH=amd64 VERSION=$version sh scripts/build.sh
 	sudo sh scripts/install-test.sh "$old" "$outdir"
+	sudo bash scripts/wizard-test.sh "$old" "$outdir"
 else
 	note "the installation test did not run (set RELEASE_CHECK_INSTALL=1 on a disposable machine)"
 fi

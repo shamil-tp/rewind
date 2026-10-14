@@ -53,18 +53,25 @@ one account, and arm64 builds.
 
 ## Quick start
 
-On the server, download a release, verify it and install it as a systemd
-service:
+On an Ubuntu Server (24.04 or 26.04 LTS, x86-64), download the installer,
+verify it, and run the wizard:
 
 ```sh
-VERSION=v0.1.0
+VERSION=vX.Y.Z    # a release from the releases page
 base="https://github.com/shamil-tp/rewind/releases/download/$VERSION"
-curl -fLO "$base/rewind-$VERSION-linux-amd64.tar.gz"
 curl -fLO "$base/install.sh"
 curl -fLO "$base/SHA256SUMS"
-sha256sum -c SHA256SUMS --ignore-missing      # both lines must say OK
-sudo sh install.sh install rewind-$VERSION-linux-amd64.tar.gz
+sha256sum -c SHA256SUMS --ignore-missing      # must say OK
+sudo bash install.sh
 ```
+
+The wizard is published with releases after v1.2.0. The `install.sh` of
+v1.2.0 and earlier has only the scripted commands (see below).
+
+The wizard checks the server, downloads and verifies the release, asks who
+may connect (this server only, Tailscale, or your LAN) and where your music
+is, shows a summary, and installs nothing before you confirm. It creates a
+`rewind` service user, starts Rewind at boot, and checks its health.
 
 Then:
 
@@ -72,14 +79,15 @@ Then:
    From your computer, open a tunnel (`ssh -L 8090:127.0.0.1:8090
    you@server`), browse to http://localhost:8090, and enter the code from
    `sudo cat /var/lib/rewind/setup-code`.
-2. **Add music.** Mount the drive, set `REWIND_LIBRARY_ROOTS=/your/mount`
-   in `/etc/rewind/rewind.env`, and run `sudo systemctl restart rewind`.
+2. **Later changes:** `sudo rewind-ctl` shows the status and offers repair,
+   update, settings (music folders, network access) and uninstall.
 3. **Optional: use it from other devices** with `tailscale serve` (HTTPS,
    recommended) or on your LAN. See
    [Network access](docs/deployment.md#network-access).
 
-The full guide, including a manual installation without the script, is
-[docs/install.md](docs/install.md).
+The full guide, including the scripted installation
+(`sudo sh install.sh install ARCHIVE`) and a manual one without the script,
+is [docs/install.md](docs/install.md).
 
 ## Security defaults
 
@@ -100,12 +108,16 @@ and how to report vulnerabilities.
 
 ## Operating it
 
-- **Logs and status:** `journalctl -u rewind`, `sudo sh install.sh status`.
+- **Logs and status:** `journalctl -u rewind`, `sudo rewind-ctl --status`.
+- **Settings, repair, uninstall:** `sudo rewind-ctl --reconfigure`,
+  `--repair`, `--uninstall`. Uninstalling keeps your database unless you
+  choose a purge and type `PURGE`; it never touches your music.
 - **Backup:** the database `/var/lib/rewind/rewind.db` is the only state.
   Back it up with `sqlite3 .backup`, or by copying it while Rewind is
   stopped. Music is not part of the backup.
-- **Upgrade:** `sudo sh install.sh upgrade <archive>` verifies the archive,
-  test-starts it, backs up the database, switches, and health-checks.
+- **Upgrade:** `sudo rewind-ctl --update` (or
+  `sudo sh install.sh upgrade <archive>`) verifies the archive, test-starts
+  it, backs up the database, switches, and health-checks.
 - **Rollback:** `sudo sh install.sh rollback <version>`. A newer release
   may have migrated the database; then restore the backup made before the
   upgrade.
@@ -117,7 +129,7 @@ including troubleshooting, restoring a backup and password recovery.
 
 | Document | Contents |
 | --- | --- |
-| [install.md](docs/install.md) | installation, first run, USB music, uninstalling |
+| [install.md](docs/install.md) | installation wizard, first run, USB music and permissions, rewind-ctl, uninstalling |
 | [configuration.md](docs/configuration.md) | every setting |
 | [operations.md](docs/operations.md) | service, logs, backup and restore, upgrade and rollback, troubleshooting |
 | [library.md](docs/library.md) | music folders, mount paths, permissions, scanning, disconnected drives |

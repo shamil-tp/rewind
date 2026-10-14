@@ -175,3 +175,12 @@ jobs:
       # install.sh installs a real service, then upgrades and rolls back.
       - name: Install, upgrade and roll back with install.sh
         run: sudo sh scripts/install-test.sh "$RUNNER_TEMP/old" "$RUNNER_TEMP/new"
+
+      # Validation, configuration editing and uninstall planning; no root.
+      - name: Installer unit tests
+        run: bash scripts/install-unit-test.sh
+
+      # The interactive wizard, rewind-ctl and uninstall.sh, driven through
+      # standard input: install, reconfigure, update, repair, uninstall, purge.
+      - name: Installation wizard and uninstaller
+        run: sudo bash scripts/wizard-test.sh "$RUNNER_TEMP/old" "$RUNNER_TEMP/new"

@@ -7,7 +7,11 @@ configuration file of its own and **does not load `.env` files**.
   `/etc/rewind/rewind.env`, which systemd reads through `EnvironmentFile=`
   in `rewind.service`. Write plain `KEY=value` lines. Lines starting with `#`
   are comments. Run `sudo systemctl restart rewind` after a change: settings
-  are read only at startup.
+  are read only at startup. `sudo rewind-ctl --reconfigure` changes the
+  network, music, logging, scanning and session settings for you, backs up
+  the file first, and restores it if Rewind does not become healthy
+  ([install.md](install.md#managing-an-installation-rewind-ctl)). It keeps
+  every other line as it is. Values must stay on one line, without quotes.
 - **In development:** set the variables in your shell, or load a copy of
   `.env.example` into it (see [development.md](development.md#configuration)).
 

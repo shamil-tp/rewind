@@ -24,7 +24,8 @@ set -eu
 old_dist=$(cd "${1:?usage: install-test.sh OLD_DIST NEW_DIST}" && pwd)
 new_dist=$(cd "${2:?usage: install-test.sh OLD_DIST NEW_DIST}" && pwd)
 
-for p in /opt/rewind /etc/rewind /var/lib/rewind /var/backups/rewind /etc/systemd/system/rewind.service; do
+for p in /opt/rewind /etc/rewind /var/lib/rewind /var/backups/rewind /etc/systemd/system/rewind.service \
+	/usr/local/sbin/rewind-ctl; do
 	[ ! -e "$p" ] || { echo "install-test: $p exists; refusing to run on a machine with Rewind installed" >&2; exit 1; }
 done
 ! id -u rewind >/dev/null 2>&1 || { echo "install-test: user rewind exists; refusing to run" >&2; exit 1; }
@@ -63,7 +64,7 @@ cleanup() {
 		echo "install-test: KEEP=1, leaving the installation in place"
 	else
 		systemctl disable --now rewind.service >/dev/null 2>&1 || true
-		rm -f /etc/systemd/system/rewind.service
+		rm -f /etc/systemd/system/rewind.service /usr/local/sbin/rewind-ctl
 		rm -rf /etc/systemd/system/rewind.service.d
 		systemctl daemon-reload || true
 		mountpoint -q "$late" && umount "$late"
@@ -147,6 +148,12 @@ ok "service active and enabled"
 [ "$(ps -o user= -p "$(systemctl show -p MainPID --value rewind.service)")" = rewind ] || fail "service does not run as rewind"
 ok "ownership and permissions (data 0700, config 0640, database and setup code 0600, process user rewind)"
 
+[ "$(stat -c '%U:%G %a' /usr/local/sbin/rewind-ctl)" = "root:root 755" ] || fail "rewind-ctl not installed"
+grep -q '^# rewind-installer:' /usr/local/sbin/rewind-ctl || fail "rewind-ctl is not the installer"
+grep -qx 'dir /var/lib/rewind created' /etc/rewind/install-manifest || fail "installation record: $(cat /etc/rewind/install-manifest)"
+grep -q "^binary $old_version [0-9a-f]\{64\}$" /etc/rewind/install-manifest || fail "binary checksum not recorded"
+ok "management command rewind-ctl and installation record"
+
 listeners=$(ss -Hltn | awk '{print $4}' | grep ':8090$' || true)
 [ "$listeners" = "127.0.0.1:8090" ] || fail "listening on: $listeners"
 ok "listens on 127.0.0.1:8090 only"
@@ -187,7 +194,8 @@ ok "scanned 3 synthetic tracks under the hardened unit, durations read"
 
 id=$(curl -fsS -b "$jar" "$B/api/tracks?limit=1" | grep -o '"id":[0-9]*' | head -n 1 | cut -d: -f2)
 status=$(curl -sS -b "$jar" -H 'Range: bytes=0-99' -o "$work/part" -w '%{http_code}' "$B/api/tracks/$id/stream")
-[ "$status" = 206 ] && [ "$(wc -c <"$work/part")" -eq 100 ] || fail "range stream returned $status"
+[ "$status" = 206 ] || fail "range stream returned $status"
+[ "$(wc -c <"$work/part")" -eq 100 ] || fail "range stream returned $(wc -c <"$work/part") bytes"
 status=$(curl -sS -o /dev/null -w '%{http_code}' "$B/api/tracks/$id/stream")
 [ "$status" = 401 ] || fail "stream without a session returned $status"
 ok "streaming with Range (206) and without a session (401)"

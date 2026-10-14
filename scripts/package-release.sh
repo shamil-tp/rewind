@@ -10,6 +10,7 @@
 #   rewind-<version>-lgpl-sources.tar.gz  LGPL corresponding source (go-taglib,
 #                                         TagLib, utfcpp) and relink notes
 #   install.sh                            installer (scripts/install.sh)
+#   uninstall.sh                          uninstaller (scripts/uninstall.sh)
 #   SHA256SUMS                            checksums of the files above
 #
 # Files are copied from an explicit allowlist; the archives are then checked
@@ -17,10 +18,11 @@
 # audio files) and for the files an installation needs.
 #
 # Usage: scripts/package-release.sh VERSION [OUTDIR]
-#   PACKAGE_BINARY_ONLY=1  test mode for scripts/install-test.sh: builds only
-#                          the binary archive and install.sh (SHA256SUMS lists
-#                          just those), and allows uncommitted changes. Never
-#                          use it for a release.
+#   PACKAGE_BINARY_ONLY=1  test mode for scripts/install-test.sh and
+#                          scripts/wizard-test.sh: builds only the binary
+#                          archive, install.sh and uninstall.sh (SHA256SUMS
+#                          lists just those), and allows uncommitted changes.
+#                          Never use it for a release.
 # Requires: Linux (as in the release workflow; file modes must be real), go,
 # git, GNU tar, gzip, sha256sum, curl, and web/node_modules (npm ci).
 set -eu
@@ -91,13 +93,14 @@ for f in rewind rewind.service rewind.env.example LICENSE THIRD_PARTY_NOTICES.md
 done
 
 cp scripts/install.sh "$outdir/install.sh"
+cp scripts/uninstall.sh "$outdir/uninstall.sh"
 archives="$outdir/$name.tar.gz"
-sums_files="$name.tar.gz install.sh"
+sums_files="$name.tar.gz install.sh uninstall.sh"
 if [ -z "$binary_only" ]; then
 	git archive --format=tar --prefix="rewind-$version/" HEAD | gzip -n -9 >"$outdir/rewind-$version-source.tar.gz"
 	sh scripts/lgpl-sources.sh "$outdir/rewind-$version-lgpl-sources.tar.gz"
 	archives="$archives $outdir/rewind-$version-source.tar.gz"
-	sums_files="$name.tar.gz rewind-$version-source.tar.gz rewind-$version-lgpl-sources.tar.gz install.sh"
+	sums_files="$name.tar.gz rewind-$version-source.tar.gz rewind-$version-lgpl-sources.tar.gz install.sh uninstall.sh"
 fi
 
 # Nothing private may be published.

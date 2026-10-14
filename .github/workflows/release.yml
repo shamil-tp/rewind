@@ -1,6 +1,6 @@
 # Release: runs only when a version tag (v*) is pushed. It verifies the
 # tagged commit, builds the Linux amd64 binary with the frontend embedded,
-# collects license notices and LGPL sources, adds install.sh and
+# collects license notices and LGPL sources, adds install.sh, uninstall.sh and
 # SHA256SUMS, and publishes a GitHub Release
 # for that existing tag. It never creates or moves tags, and it does not
 # overwrite an existing release.
@@ -135,12 +135,13 @@ jobs:
             echo "| File | Contents |"
             echo "| --- | --- |"
             echo "| \`rewind-$VERSION-linux-amd64.tar.gz\` | binary with the web interface embedded, systemd unit, configuration template, LICENSE, THIRD_PARTY_NOTICES.md, LICENSES/, docs |"
-            echo "| \`install.sh\` | installer: checks the archive against SHA256SUMS, installs or upgrades the systemd service, rolls back |"
+            echo "| \`install.sh\` | installer: interactive wizard (\`sudo bash install.sh\`) or scripted; checks the archive against SHA256SUMS, installs, updates, repairs, rolls back; installed as \`rewind-ctl\` |"
+            echo "| \`uninstall.sh\` | uninstall wizard: removes the application, optionally the configuration, or everything after typing PURGE; never touches music |"
             echo "| \`rewind-$VERSION-source.tar.gz\` | Rewind source code at this tag |"
             echo "| \`rewind-$VERSION-lgpl-sources.tar.gz\` | corresponding source for the LGPL-2.1 components (go-taglib, TagLib) and relinking instructions |"
             echo "| \`SHA256SUMS\` | SHA-256 checksums |"
             echo
-            echo "Verify the downloads with \`sha256sum -c SHA256SUMS --ignore-missing\`. Install with \`sudo sh install.sh install rewind-$VERSION-linux-amd64.tar.gz\`, or upgrade with \`sudo sh install.sh upgrade ...\`, which backs up the database first. See \`docs/install.md\` and \`docs/operations.md\`."
+            echo "Verify the downloads with \`sha256sum -c SHA256SUMS --ignore-missing\`. Install with the wizard, \`sudo bash install.sh\` (it can download and verify the release itself), or with \`sudo sh install.sh install rewind-$VERSION-linux-amd64.tar.gz\`. Update with \`sudo rewind-ctl --update\` or \`sudo sh install.sh upgrade ...\`, which back up the database first. See \`docs/install.md\` and \`docs/operations.md\`."
             echo
             echo "Built from commit \`$GITHUB_SHA\`."
           } > dist/RELEASE_NOTES.md
@@ -190,4 +191,5 @@ jobs:
             "rewind-$TAG-source.tar.gz" \
             "rewind-$TAG-lgpl-sources.tar.gz" \
             install.sh \
+            uninstall.sh \
             SHA256SUMS

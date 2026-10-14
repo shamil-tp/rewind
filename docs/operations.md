@@ -9,7 +9,9 @@ These instructions assume the layout created by `install.sh`
 | `/opt/rewind/current` | symlink to the active release |
 | `/etc/rewind/rewind.env` | configuration ([configuration.md](configuration.md)) |
 | `/var/lib/rewind/rewind.db` | the database: account, sessions, library index, playlists, preferences |
-| `/var/backups/rewind/` | database copies made by `install.sh` |
+| `/var/backups/rewind/` | database copies made by `install.sh`, configuration copies made before changes (`rewind.env.<time>-...`) |
+| `/etc/rewind/install-manifest` | what the installer created; used by the uninstaller |
+| `/usr/local/sbin/rewind-ctl` | the installer, for maintenance ([install.md](install.md#managing-an-installation-rewind-ctl)) |
 
 Releases, configuration and data are kept separate. Replacing or removing a
 release never touches the database, the configuration or the music.
@@ -22,7 +24,9 @@ sudo systemctl stop rewind
 sudo systemctl start rewind
 sudo systemctl restart rewind     # after changing /etc/rewind/rewind.env
 sudo systemctl disable rewind     # do not start at boot
-sudo sh install.sh status         # active release, installed releases, health
+sudo rewind-ctl --status          # active release, installed releases, health, settings
+sudo rewind-ctl --repair          # restore missing parts, restart, check health
+sudo rewind-ctl --reconfigure     # network access, music folders, logging, sessions
 ```
 
 Rewind stops gracefully on SIGTERM. In-flight requests get up to 10 seconds,
@@ -106,6 +110,10 @@ copy before switching. Old backups are never deleted. Remove them yourself.
 Copy backups to another disk as well: a copy on the same disk does not
 survive a disk failure.
 
+`rewind-ctl --reconfigure` copies `rewind.env` to
+`/var/backups/rewind/rewind.env.<UTC time>-before-change` before changing it,
+and uninstall option 2 to `...-before-uninstall`.
+
 Also keep a copy of `/etc/rewind/rewind.env` if you changed it. It contains
 no secrets.
 
@@ -135,8 +143,11 @@ automatically.
 ## Upgrading
 
 1. Read the release notes and `CHANGELOG.md` for the new version.
-2. Download and verify the new archive, `install.sh` and `SHA256SUMS`, as in
-   [install.md, step 1](install.md#1-download-and-verify).
+2. The simplest way is `sudo rewind-ctl --update`: it downloads the latest
+   release (or `--release vX.Y.Z`, or `--archive FILE`), verifies it against
+   `SHA256SUMS`, and does everything below. By hand, download and verify the
+   new archive, `install.sh` and `SHA256SUMS`, as in
+   [install.md, "Installing without questions"](install.md#installing-without-questions-scripted).
 3. Upgrade:
 
    ```sh
