@@ -599,8 +599,9 @@ Details, the security model and the contributor guide are in
   - other extension-less paths fall back to `index.html`;
   - missing files with an extension return 404.
 - *Implemented:* design tokens are CSS custom properties (`--rw-*`) in
-  `web/src/app.css`. The eight `--rw-color-*` tokens are the theme system's
-  only inputs (Phase 9, see below).
+  `web/src/app.css`. The themed subset (colors, type, shape, surfaces) is
+  the theme system's only output to the page (see "theme and style system"
+  below).
 - *Implemented (Phase 6): main UI.* Once signed in, `App` renders
   `Shell`:
   - **Navigation:** a sidebar on desktop and a top bar on narrow screens.
@@ -699,9 +700,8 @@ Details, the security model and the contributor guide are in
     storage at all" now checks that nothing else, and no credential, is
     stored.
   - CLAUDE.md's Phase 8 also mentions custom themes loaded from a documented
-    location. That was deliberately left out (the Phase 9 brief excludes
-    user stylesheets and theme downloads); the limited custom accent covers
-    the common need.
+    location. Phase 9 left that out; the theme and style system (below)
+    adds it as administrator-installed, data-only manifests.
 - *Implemented (UI enhancement after Phase 12): rounded neo-brutalism, Now
   Playing, three custom colors.* No backend change except two preference
   keys; no new dependency; no migration.
@@ -727,6 +727,54 @@ Details, the security model and the contributor guide are in
     never on the seek bar. Previous and next appear only while a playlist
     plays. There is no artwork API, so a placeholder is shown, and there are
     no shuffle, repeat or volume controls, because none exist.
+- *Implemented (after Phase 12): theme and style system.* Details, the
+  manifest schema and the token contract are in [themes.md](themes.md).
+  - **Model.** A theme is a declarative manifest (`theme.json`, schema 1,
+    `theme_api` 1): metadata plus values for a fixed token contract of 29
+    tokens (colors, typography, borders and radii, shadow, spacing), and the
+    list of tokens users may customize. It contains no code, CSS, markup,
+    assets or URLs. Themes are deliberately **not** plugins: they are
+    untrusted data with no capabilities, and the plugin system is unchanged.
+  - **Backend: `internal/theme`.** `tokens.go` is the contract (kinds,
+    ranges, defaults equal to Rewind Dark and `app.css`) and the WCAG
+    contrast checks. `manifest.go` is a strict parser: unknown fields,
+    duplicate keys, unknown or invalid tokens and unreadable color pairs are
+    rejected, and a different `theme_api` is reported as incompatible.
+    `registry.go` loads the bundled manifests (`go:embed`, a broken one
+    stops startup) and, if `REWIND_THEME_DIR` is set, discovers
+    `<id>/theme.json` through `os.Root` with the plugin discovery's
+    protections. It is read once at startup and never changes. `store.go`
+    holds per-user state.
+  - **Storage.** The active theme stays in the `theme` preference (prefs now
+    validates it against the registry through `prefs.WithThemes`).
+    Migration `0005_themes` adds `theme_settings` (user, theme, enabled,
+    customization JSON, last applied time). Applying, and disabling the
+    active theme, write the preference and `theme_settings` in one
+    transaction (`prefs.Store.UpdateTx`). The three earlier custom-color
+    preferences are not migrated: a theme without a saved customization
+    reports them as its `legacy` customization, so nothing changes for
+    existing users and downgrades keep working.
+  - **API.** `GET /api/themes`, `PUT /api/themes/active`,
+    `PUT /api/themes/{id}/enabled` and `PUT /api/themes/{id}/customization`,
+    all behind `requireAuth` and the existing cross-origin protection, each
+    returning the full state. There are no install, upload or file endpoints.
+  - **Frontend.** `services/theme-tokens.json` mirrors the contract (a Go
+    golden test keeps it identical). `services/themes.ts` validates values,
+    resolves a theme plus a customization (unreadable colors are ignored and
+    reported), and turns tokens into the `--rw-*` properties with its own
+    code (`cssVariables`), set through `style.setProperty`, so the CSP is
+    unchanged. `Shell` holds the single theme state from the server and one
+    effect applies the shown theme: a preview from Settings while Settings is
+    open, otherwise the active theme. `ThemeSettings` (cards, apply, preview,
+    enable/disable) and `ThemeEditor` (generated controls, live preview,
+    contrast blocking, Save / Save and apply / Save only / Reset / Cancel
+    with a discard confirmation) live in Settings. `ThemePreview` draws the
+    main screens with the shared `app.css` classes. The `rewind.theme` hint
+    now holds the token values last shown (version 2).
+  - **New tokens** in `app.css`: `--rw-radius-button`, `--rw-radius-input`,
+    `--rw-border-style`, `--rw-line-height`, `--rw-heading-scale` and
+    `--rw-space-panel`, used by buttons, inputs, structural borders, body
+    text, titles and panels. No new dependency.
 - *Implemented (Phase 7): installable PWA.*
   - `public/manifest.webmanifest`: `standalone`, start URL and scope `/`, dark
     background and theme colour, icons at 192 and 512 px plus a maskable
@@ -1060,6 +1108,7 @@ Phase 10 still performs the full endpoint-by-endpoint review.
 | 11 | Security, reliability and performance audit (CLAUDE.md "Phase 10" scope), documented in [security-audit.md](security-audit.md): Range zero-suffix fix, stream-open race check (`os.SameFile`), non-destructive password recovery, private deploy backups, two test-reliability fixes, measurements on a development machine. No new features, dependencies or schema changes. |
 | later | Resource measurement on the owner's actual hardware. |
 | 12 | Packaging and release readiness (CLAUDE.md "Phase 11" scope). Release packaging was implemented earlier (see "CI/CD" above). Phase 12 adds: the hardened systemd unit and server configuration template in `release/`, `install.sh` (install, upgrade, rollback, status), an end-to-end installation test run in CI (`install-test.sh`), `release-check.sh`, the installation, configuration and operations guides, SECURITY.md, CONTRIBUTING.md, CHANGELOG.md and issue templates. It also fixes security-audit F8: taglib's compiled-code cache is moved out of the shared `/tmp`. No new features, no schema change and no new dependency. |
+| UI | Theme and style system: declarative theme manifests (theme API 1) validated on the server, bundled Rewind Dark/Light/OLED, optional administrator theme directory (`REWIND_THEME_DIR`), migration `0005_themes` (per-theme customization, enabled flag), theme API endpoints, Settings theme cards and per-theme editor with live preview. Earlier custom colors kept as "legacy" customization. No upload/download, no theme code, no new dependency. |
 
 ### Phase 1 acceptance criteria (as amended)
 
@@ -1116,7 +1165,7 @@ purging missing tracks and disabled roots, indexes for the library API
 column if more accounts are ever added, a trusted reverse-proxy model
 (deliberately not implemented in Phase 7: forwarding headers are ignored),
 WAL mode (only if contention is measured), artwork cache and thumbnails
-(3/7), Media Session lock-screen controls, user-defined theme files (left out in Phase 9), plugin trust model, a container image (Phase 12
+(3/7), Media Session lock-screen controls, hot reload of the theme directory, plugin trust model, a container image (Phase 12
 chose a native systemd installation; no image is published), Debian/Ubuntu
 packages (`.deb`), signed releases, and arm64 builds (after amd64 is
 stable, and only once tested).

@@ -19,6 +19,7 @@ import (
 	"github.com/shamil-tp/rewind/internal/library"
 	"github.com/shamil-tp/rewind/internal/plugin"
 	"github.com/shamil-tp/rewind/internal/prefs"
+	"github.com/shamil-tp/rewind/internal/theme"
 )
 
 const (
@@ -53,6 +54,8 @@ type Options struct {
 	// Playlists and Preferences store per-user data.
 	Playlists   *library.Playlists
 	Preferences *prefs.Store
+	// Themes stores per-user theme settings over the theme registry.
+	Themes *theme.Store
 	// MaxPageSize caps the limit parameter of paginated endpoints
 	// (default config.DefaultMaxPageSize).
 	MaxPageSize int
@@ -73,8 +76,8 @@ func New(opts Options) (http.Handler, error) {
 // additional routes and receives the authentication middleware.
 func newHandler(opts Options, extra func(mux *http.ServeMux, requireAuth func(http.Handler) http.Handler)) (http.Handler, error) {
 	if opts.Auth == nil || opts.Limiter == nil || opts.Logger == nil || opts.Catalog == nil || opts.Scanner == nil ||
-		opts.Playlists == nil || opts.Preferences == nil {
-		return nil, errors.New("server: Auth, Limiter, Logger, Catalog, Scanner, Playlists and Preferences are required")
+		opts.Playlists == nil || opts.Preferences == nil || opts.Themes == nil {
+		return nil, errors.New("server: Auth, Limiter, Logger, Catalog, Scanner, Playlists, Preferences and Themes are required")
 	}
 	if opts.MaxPageSize <= 0 {
 		opts.MaxPageSize = config.DefaultMaxPageSize
@@ -116,6 +119,14 @@ func newHandler(opts Options, extra func(mux *http.ServeMux, requireAuth func(ht
 	mux.Handle("/api/playlists/{id}/tracks", protected(p.tracks, http.MethodPost, http.MethodPut))
 	mux.Handle("/api/playlists/{id}/tracks/{trackId}", protected(p.entry, http.MethodDelete))
 	mux.Handle("/api/preferences", protected(p.preferences, http.MethodGet, http.MethodHead, http.MethodPatch))
+
+	// Themes: listing, applying, enabling and customizing. Installing themes
+	// is an administrator task outside the API (docs/themes.md).
+	th := &themeAPI{store: opts.Themes, logger: opts.Logger}
+	mux.Handle("/api/themes", protected(th.list, http.MethodGet, http.MethodHead))
+	mux.Handle("/api/themes/active", protected(th.active, http.MethodPut))
+	mux.Handle("/api/themes/{id}/enabled", protected(th.enabled, http.MethodPut))
+	mux.Handle("/api/themes/{id}/customization", protected(th.customization, http.MethodPut))
 
 	// Plugin status: read-only. Plugins cannot register routes.
 	mux.Handle("/api/plugins", protected(pluginStatus(opts.Plugins), http.MethodGet, http.MethodHead))

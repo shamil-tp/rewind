@@ -334,16 +334,17 @@ export interface Preferences {
   library_sort: LibrarySortChoice
   autoplay_next: boolean
   /**
-   * A built-in theme ID (see services/themes.ts). Typed as string because a
-   * server of another version may send an ID this client does not know;
-   * themeById falls back to the default.
+   * The active theme's ID. Read-only here: themes are applied through the
+   * theme API (applyThemeById), which is authoritative.
    */
   theme: string
-  /** "" for the theme's accent, or a custom "#rrggbb" accent (highlights). */
+  /**
+   * Custom colors from before per-theme customization ("" for none). They
+   * still apply to themes the user has not customized; the server reports
+   * them as each theme's "legacy" customization.
+   */
   accent_color: string
-  /** "" for the theme's (or the custom accent), or a custom "#rrggbb" primary color. */
   primary_color: string
-  /** "" for the theme's, or a custom "#rrggbb" secondary color. */
   secondary_color: string
 }
 
@@ -363,6 +364,71 @@ export async function getPreferences(signal?: AbortSignal): Promise<Preferences>
 /** Saves the given preferences; returns all preferences as stored. */
 export async function savePreferences(changes: Partial<Preferences>): Promise<Preferences> {
   return (await request<{ preferences: Preferences }>('PATCH', '/api/preferences', changes)).preferences
+}
+
+// --- Themes ---
+
+export type ThemeSource = 'bundled' | 'installed'
+export type ThemeAvailability = 'available' | 'invalid' | 'incompatible'
+
+/**
+ * One theme as the signed-in user sees it. Name, description, author and
+ * homepage come from the theme's manifest: render them as text only.
+ */
+export interface ThemeInfo {
+  id: string
+  name?: string
+  version?: string
+  description?: string
+  author?: string
+  homepage?: string
+  scheme?: 'dark' | 'light'
+  source: ThemeSource
+  state: ThemeAvailability
+  /** Why the theme cannot be used, written by Rewind. */
+  error?: string
+  enabled: boolean
+  active: boolean
+  /** The theme's own value for every token (available themes only). */
+  tokens?: Record<string, string | number>
+  /** Tokens the user may customize in this theme. */
+  customizable?: string[]
+  /** The user's values for this theme. */
+  customization: Record<string, string | number>
+  /** "legacy": the theme was never customized and the earlier custom colors apply. */
+  customization_source: 'none' | 'saved' | 'legacy'
+}
+
+export interface ThemeState {
+  theme_api: number
+  /** True when the administrator configured a theme directory. */
+  directory_configured: boolean
+  /** The theme shown: always an available, enabled theme. */
+  active: string
+  default_theme: string
+  /** Why the active theme is not the saved one, if it is not. */
+  notice?: string
+  items: ThemeInfo[]
+}
+
+const themePath = (id: string) => `/api/themes/${encodeURIComponent(id)}`
+
+export function getThemes(signal?: AbortSignal): Promise<ThemeState> {
+  return request<ThemeState>('GET', '/api/themes', undefined, signal)
+}
+
+/** Makes a theme the active one; returns the new state. */
+export function applyThemeById(id: string): Promise<ThemeState> {
+  return request<ThemeState>('PUT', '/api/themes/active', { id })
+}
+
+export function setThemeEnabled(id: string, enabled: boolean): Promise<ThemeState> {
+  return request<ThemeState>('PUT', `${themePath(id)}/enabled`, { enabled })
+}
+
+/** Replaces the user's customization of one theme ({} resets it); returns the new state. */
+export function saveThemeCustomization(id: string, tokens: Record<string, string | number>): Promise<ThemeState> {
+  return request<ThemeState>('PUT', `${themePath(id)}/customization`, { tokens })
 }
 
 // --- Plugins (read-only status) ---

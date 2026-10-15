@@ -1,0 +1,33 @@
+{
+  "schema": 1,
+  "id": "oled-black",
+  "name": "Rewind OLED",
+  "version": "1.0.0",
+  "description": "Pure black background and near-black surfaces, so OLED screens light fewer pixels; dimmer borders and a smaller shadow.",
+  "author": "Rewind contributors",
+  "theme_api": 1,
+  "scheme": "dark",
+  "tokens": {
+    "color.background": "#000000",
+    "color.surface": "#0c0c0c",
+    "color.text": "#ededed",
+    "color.text-muted": "#9e9e9e",
+    "color.border": "#d9d9d9",
+    "color.primary": "#c6ff00",
+    "color.on-primary": "#000000",
+    "color.secondary": "#1c1c1c",
+    "color.on-secondary": "#ededed",
+    "color.accent": "#c6ff00",
+    "color.on-accent": "#000000",
+    "color.danger": "#ff5c5c",
+    "shadow.size": "small"
+  },
+  "customizable": [
+    "color.surface", "color.text", "color.text-muted", "color.border",
+    "color.primary", "color.secondary", "color.accent",
+    "font.family", "font.size", "font.heading-scale", "font.weight", "font.line-height",
+    "border.width", "border.style",
+    "radius.small", "radius.medium", "radius.large", "radius.xlarge", "radius.button", "radius.input", "radius.artwork",
+    "shadow.size", "spacing.density", "spacing.panel"
+  ]
+}

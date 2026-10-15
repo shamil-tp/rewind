@@ -23,6 +23,7 @@ import (
 	"github.com/shamil-tp/rewind/internal/metadata"
 	"github.com/shamil-tp/rewind/internal/plugin"
 	"github.com/shamil-tp/rewind/internal/prefs"
+	"github.com/shamil-tp/rewind/internal/theme"
 )
 
 const (
@@ -66,6 +67,8 @@ type envConfig struct {
 	trustedHosts []string
 	// plugins is passed as Options.Plugins.
 	plugins *plugin.Manager
+	// themeDir is the theme directory ("" for bundled themes only).
+	themeDir string
 }
 
 func newTestEnv(t *testing.T) *testEnv {
@@ -111,11 +114,17 @@ func newTestEnvWith(t testing.TB, c envConfig) *testEnv {
 	}
 	t.Cleanup(scanner.Close) // runs before conn.Close (cleanups are LIFO)
 	env.db, env.logger, env.scanner = conn, logger, scanner
+	themes, err := theme.Load(c.themeDir, logger)
+	if err != nil {
+		t.Fatal(err)
+	}
+	preferences := prefs.NewStore(conn, prefs.WithThemes(themes.Has))
 	env.opts = Options{
 		Frontend: testFrontend(), Version: "test", Auth: svc, SetupCode: code,
 		Limiter: c.limiter, CookieSecure: c.secure, Logger: logger,
 		Catalog: library.NewCatalog(conn), Scanner: scanner, MaxPageSize: c.maxPageSize,
-		Playlists: library.NewPlaylists(conn), Preferences: prefs.NewStore(conn),
+		Playlists: library.NewPlaylists(conn), Preferences: preferences,
+		Themes:       theme.NewStore(conn, themes, preferences),
 		TrustedHosts: c.trustedHosts, Plugins: c.plugins,
 	}
 	env.handler, err = newHandler(env.opts, func(mux *http.ServeMux, requireAuth func(http.Handler) http.Handler) {

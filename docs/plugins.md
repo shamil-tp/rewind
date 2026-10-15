@@ -4,6 +4,11 @@ Rewind has a small plugin system for **trusted extensions chosen by the
 server's administrator**. It is optional: with no plugin settings, Rewind
 works exactly as without it.
 
+Visual themes are **not** plugins. A theme is a data-only JSON file (colors
+and style values), installed in its own directory (`REWIND_THEME_DIR`),
+validated as untrusted input and never executed. It gets no plugin
+capabilities, and plugins cannot add themes. See [themes.md](themes.md).
+
 ## How plugins are loaded: compile time only
 
 A Rewind plugin is a **Go package compiled into the Rewind binary**. Rewind

@@ -693,7 +693,7 @@
   .np-title {
     display: -webkit-box;
     overflow: hidden;
-    font-size: clamp(1.75rem, 4vw, 3rem);
+    font-size: calc(clamp(1.75rem, 4vw, 3rem) * var(--rw-heading-scale));
     font-weight: var(--rw-font-weight-black);
     line-height: 1.05;
     letter-spacing: -0.02em;

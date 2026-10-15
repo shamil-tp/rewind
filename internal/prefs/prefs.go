@@ -28,8 +28,15 @@ type Preferences struct {
 	// AutoplayNext continues a playlist with its next playable track when a
 	// track ends.
 	AutoplayNext bool `json:"autoplay_next"`
-	// Theme is the ID of a built-in color theme (web/src/services/themes.ts).
+	// Theme is the ID of the active theme: a bundled or installed theme
+	// (internal/theme). The theme API (/api/themes) changes it; an ID that is
+	// no longer available is read as the default.
 	Theme string `json:"theme"`
+	// AccentColor, PrimaryColor and SecondaryColor are the custom colors of
+	// Rewind 0.x before themes could be customized one by one. They are kept
+	// unchanged and still apply to every theme the user has not customized
+	// (internal/theme, "legacy" customization).
+	//
 	// AccentColor replaces the theme's accent (progress, playing markers,
 	// focus ring) when set: "" (use the theme's) or a lower-case "#rrggbb"
 	// color. The web UI also checks its contrast against the theme in use and
@@ -53,8 +60,8 @@ func Defaults() Preferences {
 // LibrarySorts lists the accepted library_sort values.
 var LibrarySorts = []string{"artist", "album", "title", "added", "year", "duration"}
 
-// Themes lists the built-in theme IDs. They must match the themes defined
-// in web/src/services/themes.ts; TestThemesMatchFrontend checks this.
+// Themes lists the bundled theme IDs. A Store accepts these unless
+// WithThemes gives it the full registry (internal/theme), as Rewind does.
 var Themes = []string{"rewind-dark", "light", "oled-black"}
 
 // colorPattern is the only accepted custom color format. Anything else,
@@ -147,10 +154,70 @@ func (e *InputError) Error() string { return e.Msg }
 type Store struct {
 	db  *sql.DB
 	now func() time.Time
+	// themeOK reports whether a theme ID may be saved and used.
+	themeOK func(id string) bool
+}
+
+// Option configures a Store.
+type Option func(*Store)
+
+// WithThemes makes the store accept exactly the theme IDs for which ok
+// returns true (the available themes). Without it, Themes is used.
+func WithThemes(ok func(id string) bool) Option {
+	return func(s *Store) { s.themeOK = ok }
 }
 
 // NewStore returns a Store over the application database.
-func NewStore(db *sql.DB) *Store { return &Store{db: db, now: time.Now} }
+func NewStore(db *sql.DB, opts ...Option) *Store {
+	s := &Store{db: db, now: time.Now}
+	for _, o := range opts {
+		o(s)
+	}
+	return s
+}
+
+// apply validates one key's value into p. The theme key is checked against
+// the store's theme list.
+func (s *Store) apply(k string, spec key, raw json.RawMessage, p *Preferences) error {
+	if k == "theme" && s.themeOK != nil {
+		var v string
+		if decode(raw, &v) != nil || !s.themeOK(v) {
+			return fmt.Errorf("must be the ID of an available theme")
+		}
+		p.Theme = v
+		return nil
+	}
+	return spec.apply(raw, p)
+}
+
+// StoredTheme returns the theme ID saved for the user, even if it is no
+// longer available, so the theme API can explain why another one is shown.
+// ok is false when none is saved.
+func (s *Store) StoredTheme(ctx context.Context, userID int64) (id string, ok bool, err error) {
+	return storedTheme(ctx, s.db, userID)
+}
+
+// StoredThemeTx is StoredTheme inside the caller's transaction.
+func (s *Store) StoredThemeTx(ctx context.Context, tx *sql.Tx, userID int64) (id string, ok bool, err error) {
+	return storedTheme(ctx, tx, userID)
+}
+
+func storedTheme(ctx context.Context, q interface {
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+}, userID int64) (id string, ok bool, err error) {
+	var raw string
+	err = q.QueryRowContext(ctx, "SELECT value FROM user_preferences WHERE user_id = ? AND key = 'theme'", userID).Scan(&raw)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, err
+	}
+	if json.Unmarshal([]byte(raw), &id) != nil {
+		return "", false, nil
+	}
+	return id, true, nil
+}
 
 // Get returns the user's preferences: saved values where valid, defaults
 // elsewhere. Unknown keys and invalid stored values are skipped.
@@ -168,7 +235,7 @@ func (s *Store) Get(ctx context.Context, userID int64) (Preferences, error) {
 		}
 		if spec, ok := keys[k]; ok {
 			next := p
-			if spec.apply(json.RawMessage(v), &next) == nil {
+			if s.apply(k, spec, json.RawMessage(v), &next) == nil {
 				p = next
 			}
 		}
@@ -180,48 +247,67 @@ func (s *Store) Get(ctx context.Context, userID int64) (Preferences, error) {
 // transaction and returns the resulting preferences. Nothing is saved if
 // any key or value is invalid.
 func (s *Store) Update(ctx context.Context, userID int64, changes map[string]json.RawMessage) (Preferences, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return Preferences{}, err
+	}
+	defer tx.Rollback()
+	if err := s.UpdateTx(ctx, tx, userID, changes); err != nil {
+		return Preferences{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return Preferences{}, err
+	}
+	return s.Get(ctx, userID)
+}
+
+// UpdateTx is Update inside the caller's transaction, for changes that must
+// be saved together with other data (the theme store saves the active theme
+// this way). It returns an *InputError for invalid changes; the caller
+// commits or rolls back.
+func (s *Store) UpdateTx(ctx context.Context, tx *sql.Tx, userID int64, changes map[string]json.RawMessage) error {
+	normalized, err := s.validate(changes)
+	if err != nil {
+		return err
+	}
+	now := s.now().Unix()
+	for _, k := range sortedKeys(normalized) {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO user_preferences (user_id, key, value, updated_at) VALUES (?, ?, ?, ?)
+			ON CONFLICT (user_id, key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
+			userID, k, normalized[k], now); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// validate checks every change and returns each value's canonical JSON.
+func (s *Store) validate(changes map[string]json.RawMessage) (map[string]string, error) {
 	if len(changes) == 0 {
-		return Preferences{}, &InputError{"no preferences given; known keys: " + strings.Join(Keys(), ", ")}
+		return nil, &InputError{"no preferences given; known keys: " + strings.Join(Keys(), ", ")}
 	}
 	var scratch Preferences
 	normalized := make(map[string]string, len(changes))
 	for _, k := range sortedKeys(changes) {
 		spec, ok := keys[k]
 		if !ok {
-			return Preferences{}, &InputError{fmt.Sprintf("unknown preference %q; known keys: %s", truncate(k, 40), strings.Join(Keys(), ", "))}
+			return nil, &InputError{fmt.Sprintf("unknown preference %q; known keys: %s", truncate(k, 40), strings.Join(Keys(), ", "))}
 		}
-		if err := spec.apply(changes[k], &scratch); err != nil {
-			return Preferences{}, &InputError{fmt.Sprintf("%s %v", k, err)}
+		if err := s.apply(k, spec, changes[k], &scratch); err != nil {
+			return nil, &InputError{fmt.Sprintf("%s %v", k, err)}
 		}
 		// Store the canonical JSON form, not the client's formatting.
 		var v any
 		if err := json.Unmarshal(changes[k], &v); err != nil {
-			return Preferences{}, err
+			return nil, err
 		}
 		b, err := json.Marshal(v)
 		if err != nil {
-			return Preferences{}, err
+			return nil, err
 		}
 		normalized[k] = string(b)
 	}
-
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return Preferences{}, err
-	}
-	defer tx.Rollback()
-	now := s.now().Unix()
-	for _, k := range sortedKeys(normalized) {
-		if _, err := tx.ExecContext(ctx, `INSERT INTO user_preferences (user_id, key, value, updated_at) VALUES (?, ?, ?, ?)
-			ON CONFLICT (user_id, key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
-			userID, k, normalized[k], now); err != nil {
-			return Preferences{}, err
-		}
-	}
-	if err := tx.Commit(); err != nil {
-		return Preferences{}, err
-	}
-	return s.Get(ctx, userID)
+	return normalized, nil
 }
 
 func sortedKeys[V any](m map[string]V) []string {

@@ -2,6 +2,7 @@ import { fireEvent, render, screen, within } from '@testing-library/svelte'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Track } from '../services/api'
 import { json, mockFetch } from '../test/fetch'
+import { themeState } from '../test/themes'
 import Shell from './Shell.svelte'
 
 function track(id: number): Track {
@@ -22,6 +23,7 @@ const routes = {
   'GET /api/library/roots': () => json(200, { items: [] }),
   'GET /api/preferences': () => json(200, { preferences: { library_sort: 'artist', autoplay_next: true } }),
   'GET /api/plugins': () => json(200, { configured: false, api_version: 1, items: [] }),
+  'GET /api/themes': () => json(200, themeState()),
 }
 
 function stubMedia() {
@@ -222,85 +224,66 @@ describe('Shell', () => {
   })
 
   describe('themes', () => {
-    const bg = () => document.documentElement.style.getPropertyValue('--rw-color-bg')
+    const token = (name: string) => document.documentElement.style.getPropertyValue(name)
+    const bg = () => token('--rw-color-bg')
+    const hint = () => JSON.parse(localStorage.getItem('rewind.theme') ?? 'null')
     afterEach(() => {
       document.documentElement.removeAttribute('style')
       delete document.documentElement.dataset.theme
       localStorage.clear()
     })
 
-    function withTheme(theme: string, extra: Record<string, unknown> = {}) {
-      return {
-        ...routes,
-        'GET /api/preferences': () => json(200, { preferences: { library_sort: 'artist', autoplay_next: true, theme, accent_color: '' } }),
-        ...extra,
-      }
-    }
-
-    it('applies the saved theme once preferences load, and remembers it for the next start', async () => {
-      mockFetch(withTheme('light'))
+    it('applies the active theme once themes load, and remembers it for the next start', async () => {
+      mockFetch({ ...routes, 'GET /api/themes': () => json(200, themeState('light')) })
       render(Shell, { props: props() })
       await vi.waitFor(() => expect(bg()).toBe('#f5f5f0'))
       expect(document.documentElement.dataset.theme).toBe('light')
-      expect(JSON.parse(localStorage.getItem('rewind.theme')!)).toEqual({ theme: 'light', primary: '', secondary: '', accent: '' })
+      expect(hint()).toMatchObject({ v: 2, theme: 'light', values: { 'color.background': '#f5f5f0' } })
     })
 
-    it('applies saved primary, secondary and accent colors, and remembers them', async () => {
+    it('applies the saved customization of the active theme', async () => {
       mockFetch({
         ...routes,
-        'GET /api/preferences': () =>
-          json(200, {
-            preferences: {
-              library_sort: 'artist', autoplay_next: true, theme: 'rewind-dark',
-              primary_color: '#80b3ff', secondary_color: '#004466', accent_color: '#ff8800',
-            },
-          }),
+        'GET /api/themes': () =>
+          json(200, themeState('rewind-dark', { 'rewind-dark': { customization: { 'color.primary': '#80b3ff', 'radius.button': 4 } } })),
       })
       render(Shell, { props: props() })
-      const token = (name: string) => document.documentElement.style.getPropertyValue(name)
       await vi.waitFor(() => expect(token('--rw-color-primary')).toBe('#80b3ff'))
-      expect(token('--rw-color-secondary')).toBe('#004466')
-      expect(token('--rw-color-accent')).toBe('#ff8800')
-      expect(JSON.parse(localStorage.getItem('rewind.theme')!)).toEqual({
-        theme: 'rewind-dark', primary: '#80b3ff', secondary: '#004466', accent: '#ff8800',
-      })
+      expect(token('--rw-radius-button')).toBe('4px')
+      expect(hint().values['radius.button']).toBe(4)
     })
 
-    it('keeps an accent saved by an older version: buttons use it as before', async () => {
-      // A server response from before primary_color and secondary_color existed.
+    it('keeps colors chosen before per-theme customization: buttons follow a custom accent', async () => {
+      // The server reports the earlier preferences as a "legacy" customization.
+      const legacy = { 'color.accent': '#ff8800', 'color.primary': '#ff8800' }
       mockFetch({
         ...routes,
-        'GET /api/preferences': () =>
-          json(200, { preferences: { library_sort: 'artist', autoplay_next: true, theme: 'rewind-dark', accent_color: '#ff8800' } }),
+        'GET /api/themes': () => json(200, themeState('rewind-dark', { 'rewind-dark': { customization: legacy, customization_source: 'legacy' } })),
       })
       render(Shell, { props: props() })
-      const token = (name: string) => document.documentElement.style.getPropertyValue(name)
       await vi.waitFor(() => expect(token('--rw-color-accent')).toBe('#ff8800'))
       expect(token('--rw-color-primary')).toBe('#ff8800')
     })
 
-    it('uses Rewind Dark for an unknown saved theme', async () => {
-      mockFetch(withTheme('solarized'))
+    it('uses Rewind Dark when the active theme is not available', async () => {
+      mockFetch({ ...routes, 'GET /api/themes': () => json(200, { ...themeState(), active: 'solarized' }) })
       render(Shell, { props: props() })
       await vi.waitFor(() => expect(document.documentElement.dataset.theme).toBe('rewind-dark'))
       expect(bg()).toBe('#0b0b0b')
     })
 
-    it('keeps the current colors when preferences cannot be loaded', async () => {
+    it('keeps the current colors when themes cannot be loaded', async () => {
       document.documentElement.style.setProperty('--rw-color-bg', '#000000') // e.g. the remembered OLED theme
-      mockFetch({ ...routes, 'GET /api/preferences': () => json(500, { error: { code: 'internal_error', message: 'x' } }) })
+      mockFetch({ ...routes, 'GET /api/themes': () => json(500, { error: { code: 'internal_error', message: 'x' } }) })
       render(Shell, { props: props() })
       await screen.findByRole('button', { name: 'Play Song 1 by Band' })
+      await new Promise((r) => setTimeout(r, 0))
       expect(bg()).toBe('#000000')
+      expect(localStorage.getItem('rewind.theme')).toBeNull()
     })
 
     it('switches themes from Settings without interrupting playback', async () => {
-      mockFetch(
-        withTheme('rewind-dark', {
-          'PATCH /api/preferences': () =>
-            json(200, { preferences: { library_sort: 'artist', autoplay_next: true, theme: 'light', accent_color: '' } }),
-        }),
-      )
+      mockFetch({ ...routes, 'PUT /api/themes/active': () => json(200, themeState('light')) })
       const { container } = render(Shell, { props: props() })
       await fireEvent.click(await screen.findByRole('button', { name: 'Play Song 2 by Band' }))
       const audio = container.querySelector('audio')!
@@ -309,11 +292,10 @@ describe('Shell', () => {
       const [pauses, loads] = [pause.mock.calls.length, load.mock.calls.length]
 
       await go('#/settings')
-      await fireEvent.click(await screen.findByRole('radio', { name: /Light/ }))
-      // Applied at once, before the server answers.
+      await fireEvent.click(within(screen.getByRole('listitem', { name: 'Rewind Light' })).getByRole('button', { name: 'Apply' }))
+      expect(await screen.findByText('Applied: Rewind Light.')).toBeTruthy()
       expect(bg()).toBe('#f5f5f0')
-      expect(await screen.findByText('Theme saved: Light.')).toBeTruthy()
-      expect(bg()).toBe('#f5f5f0')
+      expect(hint().theme).toBe('light')
 
       // Same element, same source, never paused or reloaded.
       expect(container.querySelectorAll('audio')).toHaveLength(1)
@@ -323,20 +305,46 @@ describe('Shell', () => {
       expect(load.mock.calls.length).toBe(loads)
       expect(within(screen.getByRole('region', { name: 'Player' })).getByRole('button', { name: 'Pause' })).toBeTruthy()
 
-      // The themed library and playlist views are the same components, unchanged.
+      // The themed library is the same component, unchanged.
       await go('#/library')
       expect(screen.getByRole('button', { name: 'Play Song 2 by Band' }).getAttribute('aria-current')).toBe('true')
     })
 
-    it('reverts to the saved theme if saving fails', async () => {
-      mockFetch(withTheme('rewind-dark', { 'PATCH /api/preferences': () => json(500, { error: { code: 'internal_error', message: 'x' } }) }))
+    it('keeps the saved theme if applying fails', async () => {
+      mockFetch({ ...routes, 'PUT /api/themes/active': () => json(500, { error: { code: 'internal_error', message: 'x' } }) })
       render(Shell, { props: props() })
       await vi.waitFor(() => expect(bg()).toBe('#0b0b0b'))
       await go('#/settings')
-      await fireEvent.click(await screen.findByRole('radio', { name: /OLED Black/ }))
-      expect(await screen.findByText(/Theme not saved/)).toBeTruthy()
+      await fireEvent.click(within(screen.getByRole('listitem', { name: 'Rewind OLED' })).getByRole('button', { name: 'Apply' }))
+      expect(await screen.findByText(/Theme not applied/)).toBeTruthy()
       expect(bg()).toBe('#0b0b0b')
-      expect(JSON.parse(localStorage.getItem('rewind.theme')!).theme).toBe('rewind-dark')
+      expect(hint().theme).toBe('rewind-dark')
+    })
+
+    it('previews unsaved edits across the app only while Settings is open, never remembering them', async () => {
+      mockFetch(routes)
+      render(Shell, { props: props() })
+      await vi.waitFor(() => expect(bg()).toBe('#0b0b0b'))
+      await go('#/settings')
+      await fireEvent.click(within(await screen.findByRole('listitem', { name: 'Rewind Light' })).getByRole('button', { name: 'Customize' }))
+      // Opening the editor previews its theme across the app.
+      expect(bg()).toBe('#f5f5f0')
+      await fireEvent.input(screen.getByLabelText('Button radius'), { target: { value: '2' } })
+      expect(token('--rw-radius-button')).toBe('2px')
+      expect(hint().theme).toBe('rewind-dark')
+
+      // Other pages show the saved theme; the edits wait in Settings.
+      await go('#/library')
+      expect(bg()).toBe('#0b0b0b')
+      expect(token('--rw-radius-button')).toBe('10px')
+      await go('#/settings')
+      expect(token('--rw-radius-button')).toBe('2px')
+
+      // Discarding returns to the saved theme.
+      await fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+      await fireEvent.click(screen.getByRole('button', { name: 'Discard changes' }))
+      expect(bg()).toBe('#0b0b0b')
+      expect(token('--rw-radius-button')).toBe('10px')
     })
   })
 })

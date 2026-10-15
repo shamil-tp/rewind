@@ -519,3 +519,81 @@ func TestPlaylistConstraints(t *testing.T) {
 		t.Errorf("after deleting the playlist: %d entries, %d tracks; want 0, 2", entries, tracks)
 	}
 }
+
+// TestUpgradeAddsThemeSettings upgrades a database with every migration up
+// to preferences (0004) and real data, and checks that the theme migration
+// keeps accounts, tracks, playlists and preferences, including the legacy
+// custom colors, and only adds its table.
+func TestUpgradeAddsThemeSettings(t *testing.T) {
+	path := filepath.Join(t.TempDir(), FileName)
+	if err := createFileIfMissing(path); err != nil {
+		t.Fatal(err)
+	}
+	conn, err := sql.Open("sqlite", "file:"+filepath.ToSlash(path)+"?_pragma=foreign_keys(1)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := fstest.MapFS{}
+	for _, name := range []string{"0001_auth.sql", "0002_library.sql", "0003_playlists.sql", "0004_preferences.sql"} {
+		old["migrations/"+name] = &fstest.MapFile{Data: mustRead(t, "migrations/"+name)}
+	}
+	if _, err := migrate(context.Background(), conn, old); err != nil {
+		t.Fatal(err)
+	}
+	for _, q := range []string{
+		`INSERT INTO users (id, username, password_hash, created_at, updated_at, password_changed_at) VALUES (1, 'owner', 'h', 1, 1, 1)`,
+		`INSERT INTO library_roots (id, configured_path, path, created_at) VALUES (1, '/m', '/m', 1)`,
+		`INSERT INTO tracks (id, root_id, rel_path, file_size, file_mtime_ns, format, title, metadata_status, first_seen_at, updated_at)
+			VALUES (1, 1, 'a.mp3', 1, 1, 'mp3', 'Kept', 'ok', 1, 1)`,
+		`INSERT INTO playlists (id, user_id, name, created_at, updated_at) VALUES (1, 1, 'Mix', 1, 1)`,
+		`INSERT INTO playlist_tracks (playlist_id, track_id, position, added_at) VALUES (1, 1, 0, 1)`,
+		`INSERT INTO user_preferences (user_id, key, value, updated_at) VALUES (1, 'theme', '"light"', 1)`,
+		`INSERT INTO user_preferences (user_id, key, value, updated_at) VALUES (1, 'accent_color', '"#ff8800"', 1)`,
+	} {
+		if _, err := conn.Exec(q); err != nil {
+			t.Fatal(err)
+		}
+	}
+	conn.Close()
+
+	db, err := Open(context.Background(), path, discard)
+	if err != nil {
+		t.Fatalf("upgrade Open() error = %v", err)
+	}
+	defer db.Close()
+	var title, accent, theme string
+	var entries, settings int
+	db.QueryRow("SELECT title FROM tracks").Scan(&title)
+	db.QueryRow("SELECT count(*) FROM playlist_tracks").Scan(&entries)
+	db.QueryRow("SELECT value FROM user_preferences WHERE key = 'accent_color'").Scan(&accent)
+	db.QueryRow("SELECT value FROM user_preferences WHERE key = 'theme'").Scan(&theme)
+	db.QueryRow("SELECT count(*) FROM theme_settings").Scan(&settings)
+	if title != "Kept" || entries != 1 || accent != `"#ff8800"` || theme != `"light"` || settings != 0 {
+		t.Errorf("after upgrade: title %q, entries %d, accent %s, theme %s, theme rows %d", title, entries, accent, theme, settings)
+	}
+
+	for _, bad := range []string{
+		`INSERT INTO theme_settings (user_id, theme_id, updated_at) VALUES (99, 'light', 1)`,             // unknown user
+		`INSERT INTO theme_settings (user_id, theme_id, updated_at) VALUES (1, '', 1)`,                   // empty ID
+		`INSERT INTO theme_settings (user_id, theme_id, enabled, updated_at) VALUES (1, 'light', 2, 1)`,  // enabled not 0/1
+		`INSERT INTO theme_settings (user_id, theme_id, tokens, updated_at) VALUES (1, 'light', 'x', 1)`, // tokens too short
+		`INSERT INTO theme_settings (user_id, theme_id, tokens, updated_at) VALUES (1, 'light', ?, 1)`,   // tokens too long
+	} {
+		var args []any
+		if strings.Contains(bad, "?") {
+			args = append(args, "{"+strings.Repeat(" ", 4096)+"}")
+		}
+		if _, err := db.Exec(bad, args...); err == nil {
+			t.Errorf("constraint not enforced: %s", bad)
+		}
+	}
+	// Deleting the user removes their theme settings.
+	if _, err := db.Exec(`INSERT INTO theme_settings (user_id, theme_id, tokens, updated_at) VALUES (1, 'light', '{}', 1)`); err != nil {
+		t.Fatal(err)
+	}
+	db.Exec("DELETE FROM users WHERE id = 1")
+	db.QueryRow("SELECT count(*) FROM theme_settings").Scan(&settings)
+	if settings != 0 {
+		t.Errorf("theme rows after deleting the user = %d", settings)
+	}
+}

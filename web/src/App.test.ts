@@ -2,11 +2,13 @@ import { fireEvent, render, screen } from '@testing-library/svelte'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import App from './App.svelte'
 import { apiError, json, mockFetch } from './test/fetch'
+import { themeState } from './test/themes'
 
 const health = () => json(200, { status: 'ok', name: 'rewind', version: 'test' })
 const owner = { id: 1, username: 'owner' }
-// The signed-in view loads the first page of tracks.
+// The signed-in view loads the first page of tracks, preferences and themes.
 const emptyLibrary = {
+  'GET /api/themes': () => json(200, themeState()),
   'GET /api/tracks?page=1&limit=50&sort=artist&order=asc': () =>
     json(200, { items: [], pagination: { page: 1, limit: 50, total: 0, total_pages: 0 } }),
   'GET /api/preferences': () =>
@@ -140,10 +142,13 @@ describe('App', () => {
     await fireEvent.click(screen.getByRole('button', { name: 'Sign in' }))
     await screen.findByRole('heading', { name: 'Library' })
     // The only thing ever stored is the theme hint (services/themes.ts): a
-    // theme ID and an optional color, nothing about the account or session.
+    // theme ID and token values, nothing about the account or session.
     await vi.waitFor(() => expect(localStorage.getItem('rewind.theme')).not.toBeNull())
     expect(Object.keys(localStorage)).toEqual(['rewind.theme'])
-    expect(JSON.parse(localStorage.getItem('rewind.theme')!)).toEqual({ theme: 'rewind-dark', primary: '', secondary: '', accent: '' })
+    const remembered = JSON.parse(localStorage.getItem('rewind.theme')!)
+    expect(Object.keys(remembered).sort()).toEqual(['theme', 'v', 'values'])
+    expect(remembered.theme).toBe('rewind-dark')
+    expect(Object.keys(remembered.values).every((k: string) => /^(color|font|border|radius|shadow|spacing)\./.test(k))).toBe(true)
     const stored = localStorage.getItem('rewind.theme')!
     for (const secret of ['owner', 'correct horse', 'session', 'token']) expect(stored).not.toContain(secret)
     expect(sessionStorage.length).toBe(0)

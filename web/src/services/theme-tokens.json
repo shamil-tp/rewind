@@ -1,0 +1,402 @@
+{
+  "theme_api": 1,
+  "tokens": [
+    {
+      "name": "color.background",
+      "group": "colors",
+      "label": "Background",
+      "help": "Page and input backgrounds, the Now Playing screen.",
+      "kind": "color",
+      "default": "#0b0b0b",
+      "required": true,
+      "customizable": true
+    },
+    {
+      "name": "color.surface",
+      "group": "colors",
+      "label": "Surface",
+      "help": "Panels, the mini player, hovered and selected rows.",
+      "kind": "color",
+      "default": "#151515",
+      "required": true,
+      "customizable": true
+    },
+    {
+      "name": "color.text",
+      "group": "colors",
+      "label": "Text",
+      "help": "Primary text.",
+      "kind": "color",
+      "default": "#f2f2f2",
+      "required": true,
+      "customizable": true
+    },
+    {
+      "name": "color.text-muted",
+      "group": "colors",
+      "label": "Secondary text",
+      "help": "Artists, counts, hints and positions.",
+      "kind": "color",
+      "default": "#a3a3a3",
+      "required": true,
+      "customizable": true
+    },
+    {
+      "name": "color.border",
+      "group": "colors",
+      "label": "Border",
+      "help": "Structural borders and outlines.",
+      "kind": "color",
+      "default": "#f2f2f2",
+      "required": true,
+      "customizable": true
+    },
+    {
+      "name": "color.primary",
+      "group": "colors",
+      "label": "Primary",
+      "help": "Main buttons, links and the current page in the menu.",
+      "kind": "color",
+      "default": "#c6ff00",
+      "required": true,
+      "customizable": true
+    },
+    {
+      "name": "color.secondary",
+      "group": "colors",
+      "label": "Secondary",
+      "help": "Secondary buttons and supporting surfaces, such as the artwork placeholder.",
+      "kind": "color",
+      "default": "#262626",
+      "required": true,
+      "customizable": true
+    },
+    {
+      "name": "color.accent",
+      "group": "colors",
+      "label": "Accent",
+      "help": "Highlights: playback progress, the playing track, focus outlines and shadows.",
+      "kind": "color",
+      "default": "#c6ff00",
+      "required": true,
+      "customizable": true
+    },
+    {
+      "name": "color.on-primary",
+      "group": "colors",
+      "label": "Text on primary",
+      "help": "Text on primary buttons. Chosen automatically when omitted.",
+      "kind": "color",
+      "default": "#0b0b0b",
+      "required": false,
+      "customizable": false
+    },
+    {
+      "name": "color.on-secondary",
+      "group": "colors",
+      "label": "Text on secondary",
+      "help": "Text on secondary buttons. Chosen automatically when omitted.",
+      "kind": "color",
+      "default": "#f2f2f2",
+      "required": false,
+      "customizable": false
+    },
+    {
+      "name": "color.on-accent",
+      "group": "colors",
+      "label": "Text on accent",
+      "help": "Text on accent markers. Chosen automatically when omitted.",
+      "kind": "color",
+      "default": "#0b0b0b",
+      "required": false,
+      "customizable": false
+    },
+    {
+      "name": "color.danger",
+      "group": "colors",
+      "label": "Danger",
+      "help": "Errors and unavailable badges; also used as text.",
+      "kind": "color",
+      "default": "#ff5c5c",
+      "required": true,
+      "customizable": false
+    },
+    {
+      "name": "font.family",
+      "group": "typography",
+      "label": "Font",
+      "help": "Typeface for text. Only fonts installed on the device are used; nothing is downloaded.",
+      "kind": "choice",
+      "choices": [
+        {
+          "value": "system",
+          "label": "System"
+        },
+        {
+          "value": "humanist",
+          "label": "Humanist"
+        },
+        {
+          "value": "geometric",
+          "label": "Geometric"
+        },
+        {
+          "value": "serif",
+          "label": "Serif"
+        },
+        {
+          "value": "mono",
+          "label": "Monospace"
+        }
+      ],
+      "default": "system",
+      "required": false,
+      "customizable": true
+    },
+    {
+      "name": "font.size",
+      "group": "typography",
+      "label": "Base font size",
+      "help": "Body text size in pixels at the browser's default size; it follows the browser's own text size setting.",
+      "kind": "length",
+      "min": 14,
+      "max": 20,
+      "step": 1,
+      "default": 16,
+      "required": false,
+      "customizable": true
+    },
+    {
+      "name": "font.heading-scale",
+      "group": "typography",
+      "label": "Heading scale",
+      "help": "Size of headings and titles relative to the default.",
+      "kind": "number",
+      "min": 0.8,
+      "max": 1.3,
+      "step": 0.05,
+      "default": 1,
+      "required": false,
+      "customizable": true
+    },
+    {
+      "name": "font.weight",
+      "group": "typography",
+      "label": "Font weight",
+      "help": "Weight of headings, titles and labels.",
+      "kind": "choice",
+      "choices": [
+        {
+          "value": "regular",
+          "label": "Regular"
+        },
+        {
+          "value": "strong",
+          "label": "Strong"
+        },
+        {
+          "value": "heavy",
+          "label": "Heavy"
+        }
+      ],
+      "default": "heavy",
+      "required": false,
+      "customizable": true
+    },
+    {
+      "name": "font.line-height",
+      "group": "typography",
+      "label": "Line height",
+      "help": "Spacing between lines of body text.",
+      "kind": "number",
+      "min": 1.3,
+      "max": 1.8,
+      "step": 0.05,
+      "default": 1.5,
+      "required": false,
+      "customizable": true
+    },
+    {
+      "name": "border.width",
+      "group": "shape",
+      "label": "Border width",
+      "help": "Width of structural borders, in pixels.",
+      "kind": "length",
+      "min": 1,
+      "max": 4,
+      "step": 1,
+      "default": 2,
+      "required": false,
+      "customizable": true
+    },
+    {
+      "name": "border.style",
+      "group": "shape",
+      "label": "Border style",
+      "help": "Line style of structural borders.",
+      "kind": "choice",
+      "choices": [
+        {
+          "value": "solid",
+          "label": "Solid"
+        },
+        {
+          "value": "dashed",
+          "label": "Dashed"
+        }
+      ],
+      "default": "solid",
+      "required": false,
+      "customizable": true
+    },
+    {
+      "name": "radius.small",
+      "group": "shape",
+      "label": "Small radius",
+      "help": "List rows and small controls.",
+      "kind": "length",
+      "max": 12,
+      "step": 1,
+      "default": 8,
+      "required": false,
+      "customizable": true
+    },
+    {
+      "name": "radius.medium",
+      "group": "shape",
+      "label": "Medium radius",
+      "help": "Notices, menu items and compact components.",
+      "kind": "length",
+      "max": 16,
+      "step": 1,
+      "default": 10,
+      "required": false,
+      "customizable": true
+    },
+    {
+      "name": "radius.large",
+      "group": "shape",
+      "label": "Large radius (cards)",
+      "help": "Cards and panels.",
+      "kind": "length",
+      "max": 24,
+      "step": 1,
+      "default": 14,
+      "required": false,
+      "customizable": true
+    },
+    {
+      "name": "radius.xlarge",
+      "group": "shape",
+      "label": "Extra-large radius",
+      "help": "The mini player.",
+      "kind": "length",
+      "max": 32,
+      "step": 1,
+      "default": 20,
+      "required": false,
+      "customizable": true
+    },
+    {
+      "name": "radius.button",
+      "group": "shape",
+      "label": "Button radius",
+      "help": "Buttons. Limited so buttons never become pills.",
+      "kind": "length",
+      "max": 16,
+      "step": 1,
+      "default": 10,
+      "required": false,
+      "customizable": true
+    },
+    {
+      "name": "radius.input",
+      "group": "shape",
+      "label": "Input radius",
+      "help": "Text fields and menus.",
+      "kind": "length",
+      "max": 14,
+      "step": 1,
+      "default": 8,
+      "required": false,
+      "customizable": true
+    },
+    {
+      "name": "radius.artwork",
+      "group": "shape",
+      "label": "Artwork radius",
+      "help": "Album artwork on the Now Playing screen.",
+      "kind": "length",
+      "max": 32,
+      "step": 1,
+      "default": 18,
+      "required": false,
+      "customizable": true
+    },
+    {
+      "name": "shadow.size",
+      "group": "surface",
+      "label": "Shadow",
+      "help": "Size of the hard offset shadow under panels and the player.",
+      "kind": "choice",
+      "choices": [
+        {
+          "value": "none",
+          "label": "None"
+        },
+        {
+          "value": "small",
+          "label": "Small"
+        },
+        {
+          "value": "medium",
+          "label": "Medium"
+        },
+        {
+          "value": "large",
+          "label": "Large"
+        }
+      ],
+      "default": "medium",
+      "required": false,
+      "customizable": true
+    },
+    {
+      "name": "spacing.density",
+      "group": "surface",
+      "label": "Density",
+      "help": "Spacing between and inside components. Touch targets keep their size.",
+      "kind": "choice",
+      "choices": [
+        {
+          "value": "compact",
+          "label": "Compact"
+        },
+        {
+          "value": "comfortable",
+          "label": "Comfortable"
+        },
+        {
+          "value": "spacious",
+          "label": "Spacious"
+        }
+      ],
+      "default": "comfortable",
+      "required": false,
+      "customizable": true
+    },
+    {
+      "name": "spacing.panel",
+      "group": "surface",
+      "label": "Panel padding",
+      "help": "Space inside panels, in pixels.",
+      "kind": "length",
+      "min": 12,
+      "max": 40,
+      "step": 4,
+      "default": 24,
+      "required": false,
+      "customizable": true
+    }
+  ]
+}

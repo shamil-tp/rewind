@@ -74,6 +74,10 @@ type Config struct {
 	// (REWIND_PLUGINS). See docs/plugins.md.
 	PluginDir string
 	Plugins   []string
+	// ThemeDir holds theme manifests installed by the administrator
+	// (REWIND_THEME_DIR); empty means bundled themes only. See
+	// docs/themes.md.
+	ThemeDir string
 }
 
 // Load reads the configuration through getenv (normally os.Getenv). All
@@ -225,6 +229,7 @@ func Load(getenv func(string) string) (Config, error) {
 	}
 
 	errs = append(errs, parsePlugins(getenv, &cfg)...)
+	errs = append(errs, parseThemes(getenv, &cfg)...)
 
 	return cfg, errors.Join(errs...)
 }

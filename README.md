@@ -23,9 +23,10 @@ service and no telemetry.
   transcoded.
 - **Playlists**, played in order with previous and next. Preferences are
   saved per account.
-- **Themes:** Rewind Dark (rounded neo-brutalist, the default), Light, OLED
-  Black, and your own primary, secondary and accent colors with contrast
-  checks and a live preview.
+- **Themes and style:** Rewind Dark (rounded neo-brutalist, the default),
+  Rewind Light and Rewind OLED. Customize colors, fonts, borders, corner
+  radii, shadows and spacing per theme with a live preview and contrast
+  checks. Administrators can add declarative (data-only) themes.
 - **Installable web app (PWA)** over HTTPS or on localhost. Only the
   interface is cached: music, library data and sign-in are never stored on
   the device.

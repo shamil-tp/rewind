@@ -219,8 +219,9 @@ the systemd journal.
 
 `REWIND_DATA_DIR=/var/lib/rewind` comes from the release's template and is
 not asked: the unit allows writes only there. Plugins
-(`REWIND_PLUGIN_DIR`, `REWIND_PLUGINS`) are configured by hand
-([plugins.md](plugins.md)). Rewind has no secret settings: the owner
+(`REWIND_PLUGIN_DIR`, `REWIND_PLUGINS`) and extra themes
+(`REWIND_THEME_DIR`) are configured by hand ([plugins.md](plugins.md),
+[themes.md](themes.md#installing-a-theme-administrator)). Rewind has no secret settings: the owner
 account is created in the browser. Lines the wizard does not manage,
 including comments and your own settings, are kept as they are.
 

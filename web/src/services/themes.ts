@@ -1,153 +1,93 @@
-// Built-in color themes. A theme is only a set of colors for the --rw-color-*
-// tokens in app.css; layout, typography and spacing never change. Themes are
-// applied by setting those custom properties on <html>, so switching needs no
-// reload and no stylesheet is ever loaded or generated from user input.
+// Themes: declarative sets of design-token values (colors, type, shape,
+// surfaces) defined on the server (internal/theme). The token contract,
+// with each token's type and limits, is mirrored in theme-tokens.json, which
+// a Go test keeps identical to the server's.
 //
-// On top of a theme, the user may choose three colors (preferences
-// primary_color, secondary_color and accent_color; "" means the theme's):
-//   primary    main buttons, links, selected navigation, primary actions
-//   secondary  secondary buttons and supporting surfaces
-//   accent     highlights: playback progress, the playing track, focus ring
-// Before there were three roles, the accent also colored buttons. So a
-// primary that was never chosen follows a custom accent, and existing accent
-// preferences look exactly as before.
+// A theme never supplies CSS. This module turns validated token values into
+// the --rw-* custom properties of app.css with code of its own, and sets
+// them through the CSS object model on <html> (or on one element, for
+// previews). So switching needs no reload, no stylesheet is ever loaded, and
+// no theme or user text can become CSS, HTML or script.
 //
-// To add a theme, see docs/themes.md: add an entry here, add its ID to
-// prefs.Themes in internal/prefs/prefs.go, and run the tests (they check
-// contrast and that both lists match).
+// On top of a theme, the user may customize the tokens the theme allows.
+// Customized colors must stay readable: values that would make text
+// unreadable are ignored (and reported), never applied.
+//
+// See docs/themes.md.
 
-export type ThemeId = 'rewind-dark' | 'light' | 'oled-black'
+import contract from './theme-tokens.json'
 
-/** One color per --rw-color-* token, as lower-case #rrggbb. */
-export interface ThemeColors {
-  /** Page and player background. */
-  bg: string
-  /** Secondary surfaces: hovered and selected rows, panels. */
-  surface: string
-  /** Primary text. */
-  text: string
-  /** Secondary text. */
-  muted: string
-  /** Structural borders. */
-  border: string
-  /** Main buttons, links, selected navigation. Also used as text. */
-  primary: string
-  /** Text on primary backgrounds. */
-  onPrimary: string
-  /** Secondary buttons and supporting surfaces (artwork placeholder). */
-  secondary: string
-  /** Text on secondary backgrounds. */
-  onSecondary: string
-  /** Highlights: progress, playing markers, focus ring. Also used as text. */
-  accent: string
-  /** Text on accent backgrounds. */
-  onAccent: string
-  /** Errors and unavailable badges. Also used as text (field errors). */
-  danger: string
-}
+export type TokenKind = 'color' | 'length' | 'number' | 'choice'
+export type TokenGroup = 'colors' | 'typography' | 'shape' | 'surface'
+export type TokenValue = string | number
+/** Token name → value, e.g. {"color.accent": "#c6ff00", "radius.button": 10}. */
+export type Tokens = Record<string, TokenValue>
 
-export interface Theme {
-  id: ThemeId
+export interface TokenSpec {
   name: string
-  /** Tells the browser how to draw native controls and scrollbars. */
-  scheme: 'dark' | 'light'
-  colors: ThemeColors
+  group: TokenGroup
+  label: string
+  help: string
+  kind: TokenKind
+  min?: number
+  max?: number
+  step?: number
+  choices?: { value: string; label: string }[]
+  default: TokenValue
+  required: boolean
+  customizable: boolean
 }
 
-export const DEFAULT_THEME: ThemeId = 'rewind-dark'
+export const THEME_API: number = contract.theme_api
+export const TOKEN_SPECS = contract.tokens as readonly TokenSpec[]
+const SPECS = new Map(TOKEN_SPECS.map((s) => [s.name, s]))
 
-export const THEMES: readonly Theme[] = [
-  {
-    id: 'rewind-dark',
-    name: 'Rewind Dark',
-    scheme: 'dark',
-    // Must equal the defaults in app.css (checked by a test).
-    colors: {
-      bg: '#0b0b0b',
-      surface: '#151515',
-      text: '#f2f2f2',
-      muted: '#a3a3a3',
-      border: '#f2f2f2',
-      primary: '#c6ff00',
-      onPrimary: '#0b0b0b',
-      secondary: '#262626',
-      onSecondary: '#f2f2f2',
-      accent: '#c6ff00',
-      onAccent: '#0b0b0b',
-      danger: '#ff5c5c',
-    },
-  },
-  {
-    id: 'light',
-    name: 'Light',
-    scheme: 'light',
-    colors: {
-      bg: '#f5f5f0',
-      surface: '#e4e4dc',
-      text: '#0b0b0b',
-      muted: '#4d4d4d',
-      border: '#0b0b0b',
-      primary: '#3a1fd6',
-      onPrimary: '#ffffff',
-      secondary: '#d6d6cc',
-      onSecondary: '#0b0b0b',
-      accent: '#3a1fd6',
-      onAccent: '#ffffff',
-      danger: '#b3001b',
-    },
-  },
-  {
-    id: 'oled-black',
-    name: 'OLED Black',
-    scheme: 'dark',
-    colors: {
-      bg: '#000000',
-      surface: '#0c0c0c',
-      text: '#ededed',
-      muted: '#9e9e9e',
-      border: '#d9d9d9',
-      primary: '#c6ff00',
-      onPrimary: '#000000',
-      secondary: '#1c1c1c',
-      onSecondary: '#ededed',
-      accent: '#c6ff00',
-      onAccent: '#000000',
-      danger: '#ff5c5c',
-    },
-  },
+export function tokenSpec(name: string): TokenSpec | undefined {
+  return SPECS.get(name)
+}
+
+export const TOKEN_GROUPS: readonly { id: TokenGroup; label: string }[] = [
+  { id: 'colors', label: 'Colors' },
+  { id: 'typography', label: 'Typography' },
+  { id: 'shape', label: 'Borders and shape' },
+  { id: 'surface', label: 'Surfaces and spacing' },
 ]
 
-/** The CSS custom property for each color. */
-export const TOKENS: Record<keyof ThemeColors, string> = {
-  bg: '--rw-color-bg',
-  surface: '--rw-color-surface',
-  text: '--rw-color-text',
-  muted: '--rw-color-muted',
-  border: '--rw-color-border',
-  primary: '--rw-color-primary',
-  onPrimary: '--rw-color-on-primary',
-  secondary: '--rw-color-secondary',
-  onSecondary: '--rw-color-on-secondary',
-  accent: '--rw-color-accent',
-  onAccent: '--rw-color-on-accent',
-  danger: '--rw-color-danger',
-}
+/** The default theme's ID and values (Rewind Dark, equal to app.css). */
+export const DEFAULT_THEME = 'rewind-dark'
+export const DEFAULT_TOKENS: Readonly<Tokens> = Object.freeze(Object.fromEntries(TOKEN_SPECS.map((s) => [s.name, s.default])))
 
-export function isThemeId(value: unknown): value is ThemeId {
-  return THEMES.some((t) => t.id === value)
-}
+/** The only accepted color format, as on the server. */
+export const COLOR_PATTERN = /^#[0-9a-f]{6}$/
 
-/** The theme with this ID, or the default for unknown or outdated IDs. */
-export function themeById(id: unknown): Theme {
-  return THEMES.find((t) => t.id === id) ?? THEMES[0]
+/**
+ * The value if it is valid for the token, else undefined. Numbers are
+ * rounded to the token's step so floating-point noise never reaches CSS.
+ */
+export function validToken(name: string, value: unknown): TokenValue | undefined {
+  const spec = SPECS.get(name)
+  if (!spec) return undefined
+  switch (spec.kind) {
+    case 'color':
+      return typeof value === 'string' && COLOR_PATTERN.test(value) ? value : undefined
+    case 'choice':
+      return typeof value === 'string' && spec.choices?.some((c) => c.value === value) ? value : undefined
+    default: {
+      if (typeof value !== 'number' || !Number.isFinite(value)) return undefined
+      const min = spec.min ?? 0
+      const max = spec.max ?? 0
+      const step = spec.step ?? 1
+      if (value < min - 1e-9 || value > max + 1e-9) return undefined
+      const steps = (value - min) / step
+      if (Math.abs(steps - Math.round(steps)) > 1e-6) return undefined
+      return Math.round((min + Math.round(steps) * step) * 1e6) / 1e6
+    }
+  }
 }
 
 // --- Contrast (WCAG 2.x relative luminance) ---
 
-/** The only accepted custom color format, as on the server. */
-export const COLOR_PATTERN = /^#[0-9a-f]{6}$/
-
-/** Minimum contrast for text, including accent-colored text. */
+/** Minimum contrast for text, including links and the focus ring. */
 export const MIN_TEXT_CONTRAST = 4.5
 /** Minimum contrast for borders and other non-text indicators. */
 export const MIN_UI_CONTRAST = 3
@@ -171,135 +111,326 @@ export function textOn(color: string): string {
   return contrast(color, '#000000') >= contrast(color, '#ffffff') ? '#000000' : '#ffffff'
 }
 
-/** The colors a user can choose. "" (or a missing value) means the theme's. */
-export type ColorRole = 'primary' | 'secondary' | 'accent'
-export type CustomColors = Record<ColorRole, string>
-export const COLOR_ROLES: readonly ColorRole[] = ['primary', 'secondary', 'accent']
-export const NO_CUSTOM_COLORS: CustomColors = { primary: '', secondary: '', accent: '' }
-
-/**
- * Why value cannot be used for role with theme, or undefined if it can.
- * Primary (links) and accent (focus ring, markers) are drawn as text on the
- * background and on surfaces, so both must reach the text contrast minimum.
- * Secondary is only ever a fill, with the theme's text or black or white on
- * it (whichever is readable), so it needs only the format check. Text on a
- * primary or accent fill needs no check: textOn picks black or white, and
- * one of them always reaches at least 4.58:1 against any color.
- */
-export function colorProblem(role: ColorRole, value: string, theme: Theme): string | undefined {
-  if (!COLOR_PATTERN.test(value)) return 'Use a color like #c6ff00 (# and six hex digits).'
-  if (role === 'secondary') return undefined
-  const worst = Math.min(contrast(value, theme.colors.bg), contrast(value, theme.colors.surface))
-  if (worst < MIN_TEXT_CONTRAST) {
-    return `Too little contrast with the ${theme.name} background (${worst.toFixed(1)}:1; at least ${MIN_TEXT_CONTRAST}:1 is needed).`
-  }
-  return undefined
+/** "dark" when white text is more readable on the background. */
+export function schemeFor(background: string): 'dark' | 'light' {
+  return textOn(background) === '#ffffff' ? 'dark' : 'light'
 }
 
-/** The accent check alone; kept for the single-accent callers. */
-export function accentProblem(accent: string, theme: Theme): string | undefined {
-  return colorProblem('accent', accent, theme)
+export interface ContrastProblem {
+  fg: string
+  bg: string
+  ratio: number
+  min: number
+  message: string
 }
 
-/**
- * A readability note that does not block saving, or undefined. A secondary
- * fill close to the border color hides the outline of secondary controls;
- * their text stays readable.
- */
-export function colorWarning(role: ColorRole, value: string, theme: Theme): string | undefined {
-  if (role !== 'secondary' || !COLOR_PATTERN.test(value)) return undefined
-  const ratio = contrast(value, theme.colors.border)
-  if (ratio < MIN_UI_CONTRAST) {
-    return `Outlines of secondary buttons will be hard to see on this color (${ratio.toFixed(1)}:1 with the border). Text stays readable.`
+// Pairs the UI draws, as in internal/theme. Themes must meet all of them. For
+// a user's customization the text pairs (4.5:1) block saving and the others
+// are notes: an outline that is hard to see does not make text unreadable.
+const PAIRS: [fg: string, bg: string, min: number, what: string][] = [
+  ['color.text', 'color.background', MIN_TEXT_CONTRAST, 'Text on the background'],
+  ['color.text', 'color.surface', MIN_TEXT_CONTRAST, 'Text on surfaces'],
+  ['color.text-muted', 'color.background', MIN_TEXT_CONTRAST, 'Secondary text on the background'],
+  ['color.text-muted', 'color.surface', MIN_TEXT_CONTRAST, 'Secondary text on surfaces'],
+  ['color.primary', 'color.background', MIN_TEXT_CONTRAST, 'Primary color (links) on the background'],
+  ['color.primary', 'color.surface', MIN_TEXT_CONTRAST, 'Primary color (links) on surfaces'],
+  ['color.on-primary', 'color.primary', MIN_TEXT_CONTRAST, 'Text on primary buttons'],
+  ['color.on-secondary', 'color.secondary', MIN_TEXT_CONTRAST, 'Text on secondary buttons'],
+  ['color.accent', 'color.background', MIN_TEXT_CONTRAST, 'Accent (focus outlines) on the background'],
+  ['color.accent', 'color.surface', MIN_TEXT_CONTRAST, 'Accent (focus outlines) on surfaces'],
+  ['color.on-accent', 'color.accent', MIN_TEXT_CONTRAST, 'Text on accent markers'],
+  ['color.danger', 'color.background', MIN_TEXT_CONTRAST, 'Error text on the background'],
+  ['color.danger', 'color.surface', MIN_UI_CONTRAST, 'Error badges on surfaces'],
+  ['color.border', 'color.background', MIN_UI_CONTRAST, 'Borders on the background'],
+  ['color.border', 'color.secondary', MIN_UI_CONTRAST, 'Outlines of secondary buttons'],
+]
+
+/** Contrast problems of complete, valid tokens: blocking (text) and notes. */
+export function checkContrast(tokens: Tokens): { blocking: ContrastProblem[]; notes: ContrastProblem[] } {
+  const blocking: ContrastProblem[] = []
+  const notes: ContrastProblem[] = []
+  for (const [fg, bg, min, what] of PAIRS) {
+    const ratio = contrast(String(tokens[fg]), String(tokens[bg]))
+    if (ratio >= min - 1e-9) continue
+    const problem = { fg, bg, ratio, min, message: `${what}: ${ratio.toFixed(1)}:1, at least ${min}:1 is needed.` }
+    ;(min === MIN_TEXT_CONTRAST ? blocking : notes).push(problem)
   }
-  return undefined
+  return { blocking, notes }
+}
+
+// --- Resolving: theme values + the user's customization ---
+
+/** The parts of a theme (from GET /api/themes) that resolving needs. */
+export interface ThemeLike {
+  id?: unknown
+  tokens?: unknown
+  customizable?: unknown
 }
 
 export interface ResolvedTheme {
-  theme: Theme
-  colors: ThemeColors
-  /** Custom colors that are set but not used with this theme (unreadable or invalid). */
-  ignored: ColorRole[]
-  /** True when a custom accent was set but is unreadable with this theme. */
-  accentIgnored: boolean
+  themeId: string
+  /** A valid value for every token. */
+  tokens: Tokens
+  scheme: 'dark' | 'light'
+  /** Customized tokens that are not used: invalid, not allowed, or unreadable. */
+  ignored: string[]
 }
 
-/** Text for a fill: the theme's text color if readable, else black or white. */
-function textFor(fill: string, theme: Theme): string {
-  return contrast(theme.colors.text, fill) >= MIN_TEXT_CONTRAST ? theme.colors.text : textOn(fill)
+// Customized colors are tried in this order when not all of them can be used.
+const COLOR_ORDER = [
+  'color.background',
+  'color.surface',
+  'color.text',
+  'color.text-muted',
+  'color.border',
+  'color.secondary',
+  'color.primary',
+  'color.accent',
+]
+
+// Error colors tried when the theme's own is unreadable on a customized
+// background: the dark and light themes' danger colors.
+const DANGER_FALLBACKS = ['#ff5c5c', '#b3001b']
+
+/**
+ * Theme colors with custom ones on top. Text on a customized fill is
+ * derived from the fill, and the error color follows a customized
+ * background, so only the customizable colors can make text unreadable.
+ */
+export function withColors(base: Tokens, custom: Tokens): Tokens {
+  const t: Tokens = { ...base, ...custom }
+  const has = (n: string) => n in custom
+  if (has('color.primary')) t['color.on-primary'] = textOn(String(t['color.primary']))
+  if (has('color.accent')) t['color.on-accent'] = textOn(String(t['color.accent']))
+  if (has('color.secondary')) {
+    const text = String(t['color.text'])
+    const fill = String(t['color.secondary'])
+    t['color.on-secondary'] = contrast(text, fill) >= MIN_TEXT_CONTRAST ? text : textOn(fill)
+  }
+  if (has('color.background') || has('color.surface')) {
+    const bg = String(t['color.background'])
+    const surface = String(t['color.surface'])
+    const options = [String(base['color.danger']), ...DANGER_FALLBACKS]
+    t['color.danger'] =
+      options.find((c) => contrast(c, bg) >= MIN_TEXT_CONTRAST && contrast(c, surface) >= MIN_UI_CONTRAST) ??
+      options.reduce((a, b) => (contrast(b, bg) > contrast(a, bg) ? b : a))
+  }
+  return t
+}
+
+/** A theme's own values: valid tokens from the server, defaults elsewhere. */
+export function themeTokens(theme: ThemeLike | undefined): Tokens {
+  const out: Tokens = { ...DEFAULT_TOKENS }
+  const given = theme?.tokens && typeof theme.tokens === 'object' ? (theme.tokens as Record<string, unknown>) : {}
+  for (const spec of TOKEN_SPECS) {
+    const v = validToken(spec.name, given[spec.name])
+    if (v !== undefined) out[spec.name] = v
+  }
+  // The server only lists readable themes; anything else (a damaged hint, a
+  // mismatched server) falls back to the default colors.
+  if (checkContrast(out).blocking.length > 0) {
+    for (const spec of TOKEN_SPECS) if (spec.kind === 'color') out[spec.name] = DEFAULT_TOKENS[spec.name]
+  }
+  return out
 }
 
 /**
- * The colors to show for a saved theme ID and custom colors. A string is
- * taken as the accent alone (the preference that existed first). Values that
- * are not plain colors, or are unreadable with the theme, are not used and
- * are listed in `ignored`, so the user can be told; they are never changed.
+ * The tokens to show for a theme and a customization. Customized values the
+ * theme does not allow, that are invalid, or whose colors would make text
+ * unreadable are not used and are listed in `ignored`; they are never
+ * changed or deleted.
  */
-export function resolveTheme(themeId: unknown, custom: unknown): ResolvedTheme {
-  const theme = themeById(themeId)
-  const wanted: Record<string, unknown> =
-    typeof custom === 'string' ? { accent: custom } : custom && typeof custom === 'object' ? (custom as Record<string, unknown>) : {}
-  const colors: ThemeColors = { ...theme.colors }
-  const ignored: ColorRole[] = []
-  const pick = (role: ColorRole): string | undefined => {
-    const v = wanted[role]
-    if (typeof v !== 'string' || v === '') return undefined
-    if (colorProblem(role, v, theme)) {
-      ignored.push(role)
-      return undefined
-    }
-    return v
+export function resolveTheme(theme: ThemeLike | undefined, custom?: unknown): ResolvedTheme {
+  const base = themeTokens(theme)
+  const allowed = new Set(Array.isArray(theme?.customizable) ? theme.customizable.filter((n) => typeof n === 'string') : [])
+  const wanted = custom && typeof custom === 'object' ? (custom as Record<string, unknown>) : {}
+  const tokens: Tokens = { ...base }
+  const ignored: string[] = []
+  const colors: Tokens = {}
+
+  for (const [name, raw] of Object.entries(wanted)) {
+    const v = allowed.has(name) ? validToken(name, raw) : undefined
+    if (v === undefined) ignored.push(name)
+    else if (SPECS.get(name)?.kind === 'color') colors[name] = v
+    else tokens[name] = v
   }
 
-  const accent = pick('accent')
-  if (accent) Object.assign(colors, { accent, onAccent: textOn(accent) })
-  // A primary that was never chosen follows a custom accent (see the top).
-  const primary = pick('primary') ?? accent
-  if (primary) Object.assign(colors, { primary, onPrimary: textOn(primary) })
-  const secondary = pick('secondary')
-  if (secondary) Object.assign(colors, { secondary, onSecondary: textFor(secondary, theme) })
-
-  return { theme, colors, ignored, accentIgnored: ignored.includes('accent') }
+  let accepted: Tokens = colors
+  if (checkContrast(withColors(base, colors)).blocking.length > 0) {
+    // Not all at once: keep each color that is readable with those kept so far.
+    accepted = {}
+    for (const name of COLOR_ORDER) {
+      if (!(name in colors)) continue
+      const next = { ...accepted, [name]: colors[name] }
+      if (checkContrast(withColors(base, next)).blocking.length > 0) ignored.push(name)
+      else accepted = next
+    }
+  }
+  const colored = withColors(base, accepted)
+  for (const spec of TOKEN_SPECS) if (spec.kind === 'color') tokens[spec.name] = colored[spec.name]
+  const themeId = typeof theme?.id === 'string' ? theme.id : DEFAULT_THEME
+  return { themeId, tokens, scheme: schemeFor(String(tokens['color.background'])), ignored: ignored.sort() }
 }
+
+// --- CSS custom properties ---
+
+// Font stacks of locally installed fonts only; nothing is downloaded.
+export const FONT_STACKS: Record<string, string> = {
+  system: "system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif",
+  humanist: "Seravek, 'Gill Sans Nova', Ubuntu, Calibri, 'DejaVu Sans', source-sans-pro, sans-serif",
+  geometric: "Avenir, Montserrat, Corbel, 'URW Gothic', source-sans-pro, sans-serif",
+  serif: "Charter, 'Bitstream Charter', 'Sitka Text', Cambria, serif",
+  mono: "ui-monospace, 'SFMono-Regular', Menlo, Consolas, 'Liberation Mono', monospace",
+}
+const WEIGHTS: Record<string, [bold: number, black: number]> = { regular: [600, 700], strong: [700, 800], heavy: [800, 900] }
+const SHADOWS: Record<string, number> = { none: 0, small: 2, medium: 4, large: 6 }
+const DENSITY: Record<string, number> = { compact: 0.8, comfortable: 1, spacious: 1.2 }
+const SPACE_REM = [0.25, 0.5, 0.75, 1, 1.5, 2.5]
+
+const COLOR_VARS: Record<string, string> = {
+  'color.background': '--rw-color-bg',
+  'color.surface': '--rw-color-surface',
+  'color.text': '--rw-color-text',
+  'color.text-muted': '--rw-color-muted',
+  'color.border': '--rw-color-border',
+  'color.primary': '--rw-color-primary',
+  'color.on-primary': '--rw-color-on-primary',
+  'color.secondary': '--rw-color-secondary',
+  'color.on-secondary': '--rw-color-on-secondary',
+  'color.accent': '--rw-color-accent',
+  'color.on-accent': '--rw-color-on-accent',
+  'color.danger': '--rw-color-danger',
+}
+const RADIUS_VARS: Record<string, string> = {
+  'radius.small': '--rw-radius-sm',
+  'radius.medium': '--rw-radius-md',
+  'radius.large': '--rw-radius-lg',
+  'radius.xlarge': '--rw-radius-xl',
+  'radius.button': '--rw-radius-button',
+  'radius.input': '--rw-radius-input',
+  'radius.artwork': '--rw-radius-art',
+}
+
+const px = (n: number) => `${n}px`
+const rem = (n: number) => `${Math.round(n * 10000) / 10000}rem`
+
+/**
+ * The value of every themeable custom property for valid tokens. Every
+ * value is built here from numbers, fixed names and #rrggbb colors; none is
+ * text from a theme or a user.
+ */
+export function cssVariables(t: Tokens): Record<string, string> {
+  const get = (name: string): TokenValue => validToken(name, t[name]) ?? DEFAULT_TOKENS[name]
+  const num = (name: string) => Number(get(name))
+  const str = (name: string) => String(get(name))
+  const vars: Record<string, string> = {}
+  for (const [name, prop] of Object.entries(COLOR_VARS)) vars[prop] = str(name)
+  for (const [name, prop] of Object.entries(RADIUS_VARS)) vars[prop] = px(num(name))
+  vars['--rw-radius-xs'] = px(Math.min(4, num('radius.small')))
+
+  const width = num('border.width')
+  vars['--rw-border-width'] = px(width)
+  vars['--rw-border-style'] = str('border.style')
+  vars['--rw-border'] = `${px(width)} ${str('border.style')} ${str('color.border')}`
+
+  const shadow = SHADOWS[str('shadow.size')] ?? 4
+  vars['--rw-shadow-offset'] = px(shadow)
+  vars['--rw-shadow'] = shadow === 0 ? 'none' : `${px(shadow)} ${px(shadow)} 0 0 ${str('color.accent')}`
+  vars['--rw-focus-ring'] = `3px solid ${str('color.accent')}`
+
+  const size = num('font.size') / 16
+  const scale = num('font.heading-scale')
+  const [bold, black] = WEIGHTS[str('font.weight')] ?? WEIGHTS.heavy
+  vars['--rw-font-sans'] = FONT_STACKS[str('font.family')] ?? FONT_STACKS.system
+  vars['--rw-font-size-sm'] = rem(size * 0.875)
+  vars['--rw-font-size-md'] = rem(size)
+  vars['--rw-font-size-lg'] = rem(size * 1.25 * scale)
+  vars['--rw-heading-scale'] = String(scale)
+  vars['--rw-font-weight-bold'] = String(bold)
+  vars['--rw-font-weight-black'] = String(black)
+  vars['--rw-line-height'] = String(num('font.line-height'))
+
+  const density = DENSITY[str('spacing.density')] ?? 1
+  SPACE_REM.forEach((v, i) => (vars[`--rw-space-${i + 1}`] = rem(v * density)))
+  vars['--rw-space-panel'] = rem(num('spacing.panel') / 16)
+  return vars
+}
+
+/** Every custom property a theme sets. */
+export const THEME_VARIABLES: readonly string[] = Object.keys(cssVariables(DEFAULT_TOKENS))
 
 // --- Applying ---
 
 /**
- * Sets every color token on <html>, plus the native color scheme and the
- * browser's theme-color. Only validated #rrggbb values reach setProperty.
+ * Sets every theme property on one element, so everything inside it uses
+ * these values (previews use the real tokens and classes this way).
  */
-export function applyTheme(resolved: ResolvedTheme, doc: Document = document): void {
-  const root = doc.documentElement
-  applyTokens(root, resolved.colors)
-  root.style.colorScheme = resolved.theme.scheme
-  root.dataset.theme = resolved.theme.id
-  doc.querySelector('meta[name="theme-color"]')?.setAttribute('content', resolved.colors.bg)
-  doc.querySelector('meta[name="color-scheme"]')?.setAttribute('content', resolved.theme.scheme)
+export function applyTokens(element: HTMLElement, tokens: Tokens): void {
+  for (const [prop, value] of Object.entries(cssVariables(tokens))) element.style.setProperty(prop, value)
 }
 
 /**
- * Sets the color tokens on one element, so everything inside it uses these
- * colors (the settings preview uses the real tokens this way). Only
- * validated #rrggbb values are written, through the CSS object model.
+ * Svelte action: styles an element (a preview) with tokens, through the
+ * CSS object model, which the Content-Security-Policy allows (inline style
+ * attributes are blocked).
  */
-export function applyTokens(element: HTMLElement, colors: ThemeColors): void {
-  for (const [key, prop] of Object.entries(TOKENS) as [keyof ThemeColors, string][]) {
-    const value = colors[key]
-    if (COLOR_PATTERN.test(value)) element.style.setProperty(prop, value)
-  }
+export function styleWith(element: HTMLElement, tokens: Tokens) {
+  applyTokens(element, tokens)
+  return { update: (next: Tokens) => applyTokens(element, next) }
 }
 
-// The server is the only record of the chosen theme. Its preferences are
-// readable only after sign-in, so the last applied theme is also remembered in
-// this browser and applied at startup, to avoid showing the default colors
-// first: the theme ID and the three custom colors. This hint never overrides
-// the server; it holds no secrets.
-const HINT_KEY = 'rewind.theme'
+/**
+ * Applies a resolved theme to the page: every property on <html>, the
+ * native color scheme and the browser's theme color. Every property is set
+ * each time, so nothing from a previous theme remains.
+ */
+export function applyTheme(resolved: ResolvedTheme, doc: Document = document): void {
+  const root = doc.documentElement
+  applyTokens(root, resolved.tokens)
+  root.style.colorScheme = resolved.scheme
+  root.dataset.theme = resolved.themeId
+  doc.querySelector('meta[name="theme-color"]')?.setAttribute('content', String(resolved.tokens['color.background']))
+  doc.querySelector('meta[name="color-scheme"]')?.setAttribute('content', resolved.scheme)
+}
 
-export function rememberTheme(themeId: ThemeId, custom: CustomColors | string): void {
-  const colors = typeof custom === 'string' ? { ...NO_CUSTOM_COLORS, accent: custom } : custom
+// --- Choosing what to show ---
+
+/** What Settings is previewing: a theme, with draft values or its saved ones. */
+export interface ThemePreview {
+  themeId: string
+  /** Draft customization; undefined shows the theme's saved customization. */
+  custom?: Tokens
+}
+
+/** The parts of the theme state (GET /api/themes) needed to pick a theme. */
+export interface ThemeStateLike {
+  active: string
+  items: (ThemeLike & { id: string; state: string; enabled?: boolean; customization?: unknown })[]
+}
+
+/**
+ * The theme to show: the preview if any, else the active theme, else the
+ * default. Only available themes are used; anything else falls back.
+ */
+export function resolveShown(state: ThemeStateLike, preview: ThemePreview | null): ResolvedTheme {
+  const usable = (id: string) => state.items.find((t) => t.id === id && t.state === 'available')
+  const previewed = preview ? usable(preview.themeId) : undefined
+  if (previewed && preview) return resolveTheme(previewed, preview.custom ?? previewed.customization)
+  const theme = usable(state.active) ?? usable(DEFAULT_THEME)
+  return resolveTheme(theme, theme?.customization)
+}
+
+// The server is the only record of the chosen theme. Its state is readable
+// only after sign-in, so the values last shown are also remembered in this
+// browser and applied at startup, to avoid showing the default colors first.
+// The hint holds token values only (no account data) and is validated like
+// server data; it never overrides the server.
+const HINT_KEY = 'rewind.theme'
+const HINT_VERSION = 2
+
+export function rememberTheme(resolved: ResolvedTheme): void {
   try {
-    localStorage.setItem(HINT_KEY, JSON.stringify({ theme: themeId, ...colors }))
+    localStorage.setItem(HINT_KEY, JSON.stringify({ v: HINT_VERSION, theme: resolved.themeId, values: resolved.tokens }))
   } catch {
     // Storage may be unavailable (private mode); the hint is optional.
   }
@@ -314,12 +445,8 @@ export function applyRememberedTheme(doc: Document = document): void {
     return
   }
   if (!hint || typeof hint !== 'object') return
-  const { theme, ...rest } = hint as Record<string, unknown>
-  if (!isThemeId(theme)) return
-  const custom = { ...NO_CUSTOM_COLORS }
-  for (const role of COLOR_ROLES) {
-    const v = rest[role]
-    if (typeof v === 'string' && COLOR_PATTERN.test(v)) custom[role] = v
-  }
-  applyTheme(resolveTheme(theme, custom), doc)
+  const { v, theme, values } = hint as Record<string, unknown>
+  // Hints from before themes had tokens (no "v") are ignored once.
+  if (v !== HINT_VERSION || typeof theme !== 'string' || !/^[a-z][a-z0-9-]{0,39}$/.test(theme) || !values || typeof values !== 'object') return
+  applyTheme(resolveTheme({ id: theme, tokens: values }), doc)
 }

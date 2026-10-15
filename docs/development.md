@@ -202,12 +202,14 @@ web/                 Svelte + TypeScript + Vite frontend (npm project)
   placeholder/       page served by non-production builds
   src/app.css        design tokens (CSS custom properties) and base styles
   src/App.svelte     auth state machine: loading, setup, sign-in, signed-in shell
-  src/components/    Shell (navigation, routes, player, preferences, playlist
-                     playback), LibraryView, AddToPlaylist, PlaylistsView,
-                     PlaylistDetail, SettingsView, StatusView, Player,
-                     SetupForm, LoginForm, ServerStatus
+  src/components/    Shell (navigation, routes, player, preferences, themes,
+                     playlist playback), LibraryView, AddToPlaylist,
+                     PlaylistsView, PlaylistDetail, SettingsView,
+                     ThemeSettings, ThemeEditor, ThemePreview, StatusView,
+                     Player, SetupForm, LoginForm, ServerStatus
   src/services/      API client, client-side validation, library sort choices,
-                     playlist playback order, themes (see docs/themes.md)
+                     playlist playback order, themes (see docs/themes.md);
+                     theme-tokens.json mirrors the server's token contract
   src/**/*.test.ts   frontend tests
 scripts/build.sh     production build
 ```
@@ -219,7 +221,7 @@ scripts/build.sh     production build
 | `#/library` (default) | `LibraryView`: tracks, search, sort, paging; `+` opens `AddToPlaylist` | `GET /api/tracks`, `GET /api/playlists`, `POST /api/playlists/{id}/tracks` |
 | `#/playlists` | `PlaylistsView`: list, create | `GET /api/playlists`, `POST /api/playlists` |
 | `#/playlists/{id}` | `PlaylistDetail`: play, rename, delete, reorder, remove | `GET`, `PATCH`, `DELETE /api/playlists/{id}`, `PUT /api/playlists/{id}/tracks`, `DELETE /api/playlists/{id}/tracks/{trackId}` |
-| `#/settings` | `SettingsView`: theme, accent color, library and playback preferences; `PluginStatus` (read-only) | `PATCH /api/preferences` (loaded by `Shell` with `GET /api/preferences`), `GET /api/plugins` |
+| `#/settings` | `SettingsView`: `ThemeSettings` (theme cards, preview, apply, enable/disable) and `ThemeEditor` (per-theme customization with `ThemePreview`), library and playback preferences, `PluginStatus` (read-only) | `GET /api/themes` (loaded by `Shell`), `PUT /api/themes/active`, `PUT /api/themes/{id}/enabled`, `PUT /api/themes/{id}/customization`, `PATCH /api/preferences` (loaded by `Shell` with `GET /api/preferences`), `GET /api/plugins` |
 | `#/status` | `StatusView`: overview, music folders, rescan | `GET /api/library`, `GET /api/library/roots`, `POST /api/library/scan` |
 | (always, once a track is chosen) | `Player`: the floating mini player, with previous/next while a playlist plays. Clicking or pulling up its track info opens the Now Playing screen, a modal view of the same `<audio>` element and state (Escape or the collapse button closes it; the rest of the page is `inert` meanwhile) | `GET /api/tracks/{id}/stream` (via `<audio>`), `HEAD` on errors |
 

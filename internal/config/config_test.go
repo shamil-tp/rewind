@@ -287,3 +287,36 @@ func TestLoadRejectsBadPluginConfig(t *testing.T) {
 		t.Error("too many plugins accepted")
 	}
 }
+
+func TestLoadThemeDir(t *testing.T) {
+	base := t.TempDir()
+	themeDir := filepath.Join(base, "themes")
+	cfg, err := Load(env(map[string]string{"REWIND_DATA_DIR": filepath.Join(base, "data"), "REWIND_THEME_DIR": themeDir + string(filepath.Separator)}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.ThemeDir != themeDir {
+		t.Errorf("ThemeDir = %q", cfg.ThemeDir)
+	}
+	if cfg, err := Load(env(nil)); err != nil || cfg.ThemeDir != "" {
+		t.Errorf("default ThemeDir = %q, %v", cfg.ThemeDir, err)
+	}
+
+	data := filepath.Join(base, "data")
+	music := filepath.Join(base, "music")
+	plugins := filepath.Join(base, "plugins")
+	for name, vars := range map[string]map[string]string{
+		"relative":          {"REWIND_THEME_DIR": "themes"},
+		"is data dir":       {"REWIND_THEME_DIR": data},
+		"inside data":       {"REWIND_THEME_DIR": filepath.Join(data, "themes")},
+		"contains data":     {"REWIND_THEME_DIR": base},
+		"inside music":      {"REWIND_THEME_DIR": filepath.Join(music, "themes"), "REWIND_LIBRARY_ROOTS": music},
+		"is plugin dir":     {"REWIND_THEME_DIR": plugins, "REWIND_PLUGIN_DIR": plugins},
+		"inside plugin dir": {"REWIND_THEME_DIR": filepath.Join(plugins, "themes"), "REWIND_PLUGIN_DIR": plugins},
+	} {
+		vars["REWIND_DATA_DIR"] = data
+		if _, err := Load(env(vars)); err == nil {
+			t.Errorf("%s: accepted", name)
+		}
+	}
+}

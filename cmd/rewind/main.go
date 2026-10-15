@@ -25,6 +25,7 @@ import (
 	"github.com/shamil-tp/rewind/internal/plugin"
 	"github.com/shamil-tp/rewind/internal/prefs"
 	"github.com/shamil-tp/rewind/internal/server"
+	"github.com/shamil-tp/rewind/internal/theme"
 	"github.com/shamil-tp/rewind/web"
 )
 
@@ -112,6 +113,15 @@ func run(ctx context.Context, getenv func(string) string, logOut io.Writer) erro
 	// (recorded as interrupted) and waits for them.
 	defer scanner.Close()
 
+	// Themes: bundled ones plus any installed by the administrator. Read once;
+	// installed themes that fail validation are logged and listed, never
+	// fatal.
+	themes, err := theme.Load(cfg.ThemeDir, logger)
+	if err != nil {
+		return err
+	}
+	preferences := prefs.NewStore(conn, prefs.WithThemes(themes.Has))
+
 	frontend, err := web.Frontend()
 	if err != nil {
 		return fmt.Errorf("loading frontend: %w", err)
@@ -121,7 +131,8 @@ func run(ctx context.Context, getenv func(string) string, logOut io.Writer) erro
 		Auth: authSvc, SetupCode: setupCode, Limiter: auth.NewLimiter(),
 		CookieSecure: cfg.CookieSecure, Logger: logger,
 		Catalog: library.NewCatalog(conn), Scanner: scanner, MaxPageSize: cfg.MaxPageSize,
-		Playlists: library.NewPlaylists(conn), Preferences: prefs.NewStore(conn),
+		Playlists: library.NewPlaylists(conn), Preferences: preferences,
+		Themes:       theme.NewStore(conn, themes, preferences),
 		TrustedHosts: cfg.AllowedHosts(), Plugins: plugins,
 	})
 	if err != nil {

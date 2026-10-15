@@ -2,8 +2,8 @@
 
 Status: **Phase 10.** This page documents only the endpoints that exist:
 health, authentication, the read-only music-library API with a rescan
-trigger, audio streaming, playlists, preferences (including the theme) and
-read-only plugin status.
+trigger, audio streaming, playlists, preferences, themes and read-only
+plugin status.
 
 ## Conventions
 
@@ -552,8 +552,8 @@ upgrade) is ignored in favour of the default.
 | --- | --- | --- | --- |
 | `library_sort` | `artist`, `album`, `title`, `added`, `year`, `duration` | `artist` | Initial sort of the library. `added` means newest first and `duration` longest first; the others are ascending. |
 | `autoplay_next` | `true`, `false` | `true` | When a playlist track ends, play the next available one. |
-| `theme` | `rewind-dark`, `light`, `oled-black` | `rewind-dark` | Color theme ([themes.md](themes.md)). |
-| `accent_color` | `""` or `#rrggbb` (six **lower-case** hex digits) | `""` | Custom accent (progress, playing markers, focus ring); `""` uses the theme's. The server checks only the format; the web UI also requires 4.5:1 contrast with the theme in use and ignores an accent that falls short. |
+| `theme` | The ID of an available theme (bundled or installed) | `rewind-dark` | The active theme. Prefer `PUT /api/themes/active`, which also checks that the theme is enabled and records it for "return to the previous theme". A saved ID that is no longer available reads as `rewind-dark`. |
+| `accent_color` | `""` or `#rrggbb` (six **lower-case** hex digits) | `""` | Earlier custom colors, kept for compatibility: these three apply only to themes the user has not customized (reported as their `legacy` customization, see [Themes](#themes)). Custom accent (progress, playing markers, focus ring); `""` uses the theme's. The server checks only the format; the web UI also requires 4.5:1 contrast with the theme in use and ignores an accent that falls short. |
 | `primary_color` | `""` or `#rrggbb` | `""` | Custom primary color (main buttons, links, selected navigation). `""` uses a custom `accent_color` if one is set, otherwise the theme's. Same checks as `accent_color`. |
 | `secondary_color` | `""` or `#rrggbb` | `""` | Custom secondary color (secondary buttons, supporting surfaces). `""` uses the theme's. The server checks only the format. |
 
@@ -565,6 +565,97 @@ wrong type, `null` or a value not in the list returns `422 validation_failed`
 and saves nothing. On success, the changes are saved in one transaction, and
 the response is the same as for `GET`. Preferences are per user and never
 contain secrets.
+
+## Themes
+
+Themes are declarative sets of design-token values (see
+[themes.md](themes.md)). Every route requires a session and returns
+`Cache-Control: no-store`. Every successful response, including changes,
+returns the **complete theme state** below, so the client always has one
+consistent copy.
+
+There are deliberately **no routes to install, upload, update or remove
+themes**: the administrator installs them in `REWIND_THEME_DIR` and restarts
+Rewind. No route reads the theme directory or returns a file path.
+
+### `GET /api/themes`
+
+```json
+{
+  "theme_api": 1,
+  "directory_configured": true,
+  "active": "light",
+  "default_theme": "rewind-dark",
+  "items": [
+    {
+      "id": "light", "name": "Rewind Light", "version": "1.0.0",
+      "description": "Near-white paper background, …", "author": "Rewind contributors",
+      "scheme": "light", "source": "bundled", "state": "available",
+      "enabled": true, "active": true,
+      "tokens": { "color.background": "#f5f5f0", "radius.button": 10, "font.family": "system", "…": "…" },
+      "customizable": ["color.background", "color.surface", "…"],
+      "customization": { "color.accent": "#0055aa" },
+      "customization_source": "saved"
+    },
+    { "id": "broken", "source": "installed", "state": "invalid", "error": "theme.json is missing",
+      "enabled": false, "active": false, "customization": {}, "customization_source": "none" }
+  ]
+}
+```
+
+| Field | Meaning |
+| --- | --- |
+| `theme_api` | The token contract this server provides. |
+| `directory_configured` | Whether `REWIND_THEME_DIR` is set. The path is never sent. |
+| `active` | The theme shown: always available and enabled. When the saved theme is not (removed, invalid, disabled), this is `default_theme` and `notice` explains why. |
+| `notice` | Optional text written by Rewind. |
+| `items[].source` | `bundled` or `installed`. Bundled first, then installed by directory name. |
+| `items[].state` | `available`, `invalid` (rejected; `error` says why) or `incompatible` (written for another `theme_api`). Only available themes have `tokens` and `customizable`. |
+| `items[].tokens` | The theme's own value for **every** token (omitted optional tokens filled in). |
+| `items[].customizable` | Tokens the user may change in this theme. |
+| `items[].customization` | The user's values for this theme: valid, allowed values that differ from the theme's. The web UI also drops colors that would be unreadable and says so. |
+| `items[].customization_source` | `saved` (the user saved values), `legacy` (never customized, so the earlier `primary_color`/`secondary_color`/`accent_color` preferences apply; an unset primary follows the accent), or `none`. |
+
+`name`, `description`, `author` and `homepage` come from the manifest and are
+untrusted: render them as plain text.
+
+### `PUT /api/themes/active`
+
+Body: `{"id": "light"}`. Makes an available, enabled theme active, records
+when it was applied, and saves it as the `theme` preference, all in one
+transaction.
+
+| Status | Code | When |
+| --- | --- | --- |
+| `200` | | The new state. |
+| `404` | `theme_not_found` | Unknown ID, or the theme is invalid or incompatible. |
+| `409` | `theme_disabled` | The theme is disabled; enable it first. |
+| `422` | `validation_failed` | `id` is missing. |
+
+### `PUT /api/themes/{id}/enabled`
+
+Body: `{"enabled": false}`. Enables or disables a theme for the user.
+Disabling the **active** theme makes the most recently applied theme that is
+still available and enabled active, or else the default, in the same
+transaction. The default theme cannot be disabled (`422 validation_failed`).
+Unknown or unavailable themes return `404 theme_not_found`.
+
+### `PUT /api/themes/{id}/customization`
+
+Body: `{"tokens": {"color.accent": "#ff8800", "radius.button": 4}}`. Replaces
+the user's customization of that theme. Every value is checked first:
+
+- the token must exist and be in the theme's `customizable` list;
+- colors must be lower-case `#rrggbb`, choices one of the listed values, and
+  numbers within the range and step.
+
+Any failure returns `422 validation_failed` naming the token, and saves
+nothing. Values equal to the theme's own are dropped. `{"tokens": {}}`
+resets the theme to its defaults, which also stops the legacy colors from
+applying to it. Other themes' customizations are never changed. The server
+checks format and range. The web UI also checks contrast before saving and
+ignores unreadable colors when showing a theme. Customizing a disabled theme
+is allowed.
 
 ## Plugins
 

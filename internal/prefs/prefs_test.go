@@ -9,10 +9,7 @@ import (
 	"errors"
 	"io"
 	"log/slog"
-	"os"
 	"path/filepath"
-	"regexp"
-	"strings"
 	"testing"
 
 	"github.com/shamil-tp/rewind/internal/db"
@@ -182,23 +179,6 @@ func TestThemeAndAccentValidation(t *testing.T) {
 // The server's allowlist and the web UI's built-in themes must agree: a theme
 // the server rejects could not be saved, and one the UI lacks would be shown
 // as the default.
-func TestThemesMatchFrontend(t *testing.T) {
-	src, err := os.ReadFile(filepath.Join("..", "..", "web", "src", "services", "themes.ts"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	var ui []string
-	for _, m := range regexp.MustCompile(`(?m)^\s*id: '([a-z0-9-]+)',$`).FindAllStringSubmatch(string(src), -1) {
-		ui = append(ui, m[1])
-	}
-	if strings.Join(ui, ",") != strings.Join(Themes, ",") {
-		t.Errorf("web UI themes %v, server allowlist %v", ui, Themes)
-	}
-	if Defaults().Theme != Themes[0] || !strings.Contains(string(src), "DEFAULT_THEME: ThemeId = '"+Themes[0]+"'") {
-		t.Errorf("default theme differs between server (%q) and web UI", Defaults().Theme)
-	}
-}
-
 func TestPrimaryAndSecondaryColors(t *testing.T) {
 	s, conn, u := newStore(t)
 	// A user who saved only an accent before these keys existed: the row is

@@ -4,9 +4,10 @@
  * corners.
  *
  * Every color, border, radius and spacing value used by components comes
- * from the custom properties below. Themes and the user's colors restyle the
- * app by overriding the color tokens (services/themes.ts) without touching
- * component code.
+ * from the custom properties below. The values here are Rewind Dark's (the
+ * default theme). Themes and the user's customizations restyle the app by
+ * overriding these properties on <html> (services/themes.ts), without
+ * touching component code; every property a theme sets is defined here.
  */
 
 :root {
@@ -29,13 +30,16 @@
 
   /* Borders and shape */
   --rw-border-width: 2px;
-  --rw-border: var(--rw-border-width) solid var(--rw-color-border);
+  --rw-border-style: solid;
+  --rw-border: var(--rw-border-width) var(--rw-border-style) var(--rw-color-border);
   --rw-radius-xs: 4px; /* tags and badges */
   --rw-radius-sm: 8px; /* inputs, small controls, list rows */
   --rw-radius-md: 10px; /* buttons, notices, compact components */
   --rw-radius-lg: 14px; /* cards and panels */
   --rw-radius-xl: 20px; /* player surfaces */
   --rw-radius-art: 18px; /* album artwork */
+  --rw-radius-button: 10px; /* buttons */
+  --rw-radius-input: 8px; /* text fields and menus */
   --rw-radius-round: 999px; /* the main play button only */
   --rw-shadow-offset: 4px;
   --rw-shadow: var(--rw-shadow-offset) var(--rw-shadow-offset) 0 0 var(--rw-color-accent);
@@ -50,9 +54,11 @@
   --rw-font-size-sm: 0.875rem;
   --rw-font-size-md: 1rem;
   --rw-font-size-lg: 1.25rem;
-  --rw-font-size-display: clamp(2.5rem, 12vw, 5.5rem);
+  --rw-heading-scale: 1;
+  --rw-font-size-display: calc(clamp(2.5rem, 12vw, 5.5rem) * var(--rw-heading-scale));
   --rw-font-weight-bold: 800;
   --rw-font-weight-black: 900;
+  --rw-line-height: 1.5;
 
   /* Spacing */
   --rw-space-1: 0.25rem;
@@ -61,6 +67,7 @@
   --rw-space-4: 1rem;
   --rw-space-5: 1.5rem;
   --rw-space-6: 2.5rem;
+  --rw-space-panel: 1.5rem; /* inside panels */
   --rw-content-max-width: 64rem;
 
   color-scheme: dark;
@@ -85,7 +92,7 @@ body {
   color: var(--rw-color-text);
   font-family: var(--rw-font-sans);
   font-size: var(--rw-font-size-md);
-  line-height: 1.5;
+  line-height: var(--rw-line-height);
 }
 
 h1,
@@ -149,7 +156,7 @@ button {
   min-height: 2.75rem;
   padding: var(--rw-space-2) var(--rw-space-3);
   border: var(--rw-border);
-  border-radius: var(--rw-radius-sm);
+  border-radius: var(--rw-radius-input);
   background: var(--rw-color-bg);
   color: var(--rw-color-text);
   font: inherit;
@@ -186,7 +193,7 @@ button {
   min-height: 2.75rem;
   padding: var(--rw-space-2) var(--rw-space-5);
   border: var(--rw-border);
-  border-radius: var(--rw-radius-md);
+  border-radius: var(--rw-radius-button);
   background: var(--rw-color-primary);
   color: var(--rw-color-on-primary);
   font-family: var(--rw-font-mono);
@@ -217,7 +224,7 @@ button {
 .rw-panel {
   display: grid;
   gap: var(--rw-space-4);
-  padding: var(--rw-space-5);
+  padding: var(--rw-space-panel);
   border: var(--rw-border);
   border-radius: var(--rw-radius-lg);
   background: var(--rw-color-surface);
@@ -252,7 +259,7 @@ code {
 }
 
 .view-title {
-  font-size: clamp(2rem, 6vw, 3.25rem);
+  font-size: calc(clamp(2rem, 6vw, 3.25rem) * var(--rw-heading-scale));
   font-weight: var(--rw-font-weight-black);
   line-height: 1;
   letter-spacing: -0.03em;

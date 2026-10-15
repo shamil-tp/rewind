@@ -1,0 +1,24 @@
+{
+  "schema": 1,
+  "id": "light",
+  "name": "Rewind Light",
+  "version": "1.0.0",
+  "description": "Near-white paper background, black text and borders, deep violet accent. For bright rooms and daylight.",
+  "author": "Rewind contributors",
+  "theme_api": 1,
+  "scheme": "light",
+  "tokens": {
+    "color.background": "#f5f5f0",
+    "color.surface": "#e4e4dc",
+    "color.text": "#0b0b0b",
+    "color.text-muted": "#4d4d4d",
+    "color.border": "#0b0b0b",
+    "color.primary": "#3a1fd6",
+    "color.on-primary": "#ffffff",
+    "color.secondary": "#d6d6cc",
+    "color.on-secondary": "#0b0b0b",
+    "color.accent": "#3a1fd6",
+    "color.on-accent": "#ffffff",
+    "color.danger": "#b3001b"
+  }
+}

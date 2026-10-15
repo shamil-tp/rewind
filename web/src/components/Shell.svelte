@@ -4,13 +4,15 @@
     ApiError,
     DEFAULT_PREFERENCES,
     getPreferences,
+    getThemes,
     type PlaylistDetail,
     type Preferences,
+    type ThemeState,
     type Track,
     type User,
   } from '../services/api'
   import { nextPlayable, type Sequence } from '../services/sequence'
-  import { applyTheme, rememberTheme, resolveTheme, type CustomColors } from '../services/themes'
+  import { applyTheme, rememberTheme, resolveShown, type ThemePreview } from '../services/themes'
   import { sentence } from '../services/validation'
   import LibraryView from './LibraryView.svelte'
   import Player from './Player.svelte'
@@ -88,25 +90,37 @@
     }
   }
 
-  // The theme follows the saved preference once it has loaded; until then
-  // (and if loading fails) the theme remembered at startup stays. Settings
-  // may preview a theme while saving it.
-  let themePreview = $state<string | null>(null)
-  const customColors = $derived<CustomColors>({
-    primary: preferences.primary_color,
-    secondary: preferences.secondary_color,
-    accent: preferences.accent_color,
-  })
-  $effect(() => {
-    if (prefsStatus !== 'ready') return
-    const resolved = resolveTheme(themePreview ?? preferences.theme, customColors)
-    applyTheme(resolved)
-    if (themePreview === null) {
-      // The hint holds only the colors actually shown with this theme.
-      const shown = { ...customColors }
-      for (const role of resolved.ignored) shown[role] = ''
-      rememberTheme(resolved.theme.id, shown)
+  // Themes: the server's theme state is the single source of truth for what
+  // is shown. Until it loads (and if loading fails) the theme remembered at
+  // startup stays. Settings may preview a theme or unsaved edits; the
+  // preview is shown only while Settings is open, so leaving it never leaves
+  // unsaved styles on other pages.
+  let themes = $state<ThemeState | null>(null)
+  let themesStatus = $state<'loading' | 'ready' | 'error'>('loading')
+  let themesError = $state('')
+  let themePreview = $state<ThemePreview | null>(null)
+
+  async function loadThemes() {
+    themesStatus = 'loading'
+    try {
+      themes = await getThemes()
+      themesStatus = 'ready'
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 401) {
+        expired()
+        return
+      }
+      themesError = err instanceof Error ? sentence(err.message) : 'Unknown error.'
+      themesStatus = 'error'
     }
+  }
+
+  $effect(() => {
+    if (!themes) return
+    const preview = route === 'settings' ? themePreview : null
+    const resolved = resolveShown(themes, preview)
+    applyTheme(resolved)
+    if (!preview) rememberTheme(resolved)
   })
 
   // A playlist being played in order: its tracks as they were when Play was
@@ -163,6 +177,7 @@
 
   onMount(() => {
     void loadPreferences()
+    void loadThemes()
     window.addEventListener('hashchange', onHashChange)
     return () => window.removeEventListener('hashchange', onHashChange)
   })
@@ -233,7 +248,12 @@
           loadError={prefsError}
           onRetry={loadPreferences}
           onSaved={(p) => (preferences = { ...DEFAULT_PREFERENCES, ...p })}
-          onPreviewTheme={(id) => (themePreview = id)}
+          {themes}
+          {themesStatus}
+          {themesError}
+          onRetryThemes={loadThemes}
+          onThemesChanged={(t) => (themes = t)}
+          onPreviewTheme={(p) => (themePreview = p)}
           onUnauthorized={expired}
         />
       </div>

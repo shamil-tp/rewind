@@ -1,24 +1,25 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import appCss from '../app.css?raw'
+import { MANIFESTS, themeInfo, themeState } from '../test/themes'
 import {
-  accentProblem,
   applyRememberedTheme,
   applyTheme,
   applyTokens,
-  colorProblem,
-  colorWarning,
+  checkContrast,
   contrast,
+  cssVariables,
   DEFAULT_THEME,
-  isThemeId,
+  DEFAULT_TOKENS,
+  FONT_STACKS,
   MIN_TEXT_CONTRAST,
-  MIN_UI_CONTRAST,
   rememberTheme,
+  resolveShown,
   resolveTheme,
   textOn,
-  themeById,
-  THEMES,
-  TOKENS,
-  type ThemeColors,
+  THEME_API,
+  THEME_VARIABLES,
+  TOKEN_SPECS,
+  validToken,
 } from './themes'
 
 // Component sources, to check that their styles use tokens only.
@@ -27,6 +28,8 @@ const components = import.meta.glob(['../App.svelte', '../components/*.svelte'],
   import: 'default',
   eager: true,
 }) as Record<string, string>
+
+const [darkInfo, lightInfo, oledInfo] = MANIFESTS.map((m) => themeInfo(m))
 
 function resetDocument() {
   document.documentElement.removeAttribute('style')
@@ -37,59 +40,68 @@ function resetDocument() {
 
 function rootDefaults(): Record<string, string> {
   const root = /:root\s*\{([^}]*)\}/.exec(appCss)?.[1] ?? ''
-  return Object.fromEntries([...root.matchAll(/(--rw-color-[a-z-]+):\s*(#[0-9a-f]{6});/g)].map((m) => [m[1], m[2]]))
+  return Object.fromEntries([...root.matchAll(/(--rw-[a-z0-9-]+):\s*([^;]+);/g)].map((m) => [m[1], m[2].trim()]))
 }
 
-describe('built-in themes', () => {
-  it('include Rewind Dark (the default), Light and OLED Black', () => {
-    expect(THEMES.map((t) => t.name)).toEqual(['Rewind Dark', 'Light', 'OLED Black'])
-    expect(DEFAULT_THEME).toBe('rewind-dark')
-    expect(new Set(THEMES.map((t) => t.id)).size).toBe(THEMES.length)
+describe('token contract', () => {
+  it('is theme API 1, with a valid default for every token', () => {
+    expect(THEME_API).toBe(1)
+    expect(TOKEN_SPECS.length).toBeGreaterThanOrEqual(25)
+    for (const s of TOKEN_SPECS) expect(validToken(s.name, s.default), s.name).toBe(s.default)
+    // The customizable colors are the eight roles of the editor.
+    expect(TOKEN_SPECS.filter((s) => s.kind === 'color' && s.customizable).map((s) => s.name)).toEqual([
+      'color.background', 'color.surface', 'color.text', 'color.text-muted', 'color.border',
+      'color.primary', 'color.secondary', 'color.accent',
+    ])
   })
 
-  it('each define every token as a #rrggbb color', () => {
-    for (const t of THEMES) {
-      expect(Object.keys(t.colors).sort()).toEqual(Object.keys(TOKENS).sort())
-      for (const v of Object.values(t.colors)) expect(v, `${t.id}`).toMatch(/^#[0-9a-f]{6}$/)
-    }
-  })
-
-  it('Rewind Dark is exactly the design in app.css', () => {
+  it('app.css defines every themed property, with Rewind Dark values', () => {
     const css = rootDefaults()
-    const dark = themeById('rewind-dark').colors
-    for (const [key, prop] of Object.entries(TOKENS) as [keyof ThemeColors, string][]) {
-      expect(css[prop], prop).toBe(dark[key])
+    const vars = cssVariables(DEFAULT_TOKENS)
+    for (const prop of THEME_VARIABLES) {
+      expect(css[prop], `${prop} missing from app.css`).toBeDefined()
+      // Composite properties refer to others with var() in app.css.
+      if (!css[prop].includes('var(')) expect(css[prop], prop).toBe(vars[prop])
     }
-    // app.css defines no color token that themes do not set.
-    expect(Object.keys(css).sort()).toEqual(Object.values(TOKENS).sort())
+    expect(css['--rw-font-sans']).toBe(FONT_STACKS.system)
   })
 
-  // Pairs the UI actually draws. Text needs 4.5:1 (WCAG AA); borders 3:1.
-  const pairs: [keyof ThemeColors, keyof ThemeColors, number][] = [
-    ['text', 'bg', MIN_TEXT_CONTRAST],
-    ['text', 'surface', MIN_TEXT_CONTRAST],
-    ['muted', 'bg', MIN_TEXT_CONTRAST],
-    ['muted', 'surface', MIN_TEXT_CONTRAST],
-    ['primary', 'bg', MIN_TEXT_CONTRAST], // links, selected navigation
-    ['primary', 'surface', MIN_TEXT_CONTRAST],
-    ['onPrimary', 'primary', MIN_TEXT_CONTRAST], // buttons
-    ['onSecondary', 'secondary', MIN_TEXT_CONTRAST], // secondary buttons
-    ['border', 'secondary', MIN_UI_CONTRAST], // outlines of secondary buttons
-    ['accent', 'bg', MIN_TEXT_CONTRAST], // focus ring, current-track bars
-    ['accent', 'surface', MIN_TEXT_CONTRAST],
-    ['onAccent', 'accent', MIN_TEXT_CONTRAST], // "Playing" markers
-    ['danger', 'bg', MIN_TEXT_CONTRAST], // field errors are danger-colored text
-    ['danger', 'surface', MIN_UI_CONTRAST], // badges and alert borders
-    ['border', 'bg', MIN_UI_CONTRAST],
-  ]
-  for (const t of THEMES) {
-    it(`${t.name} has readable contrast`, () => {
-      for (const [fg, bg, min] of pairs) {
-        const ratio = contrast(t.colors[fg], t.colors[bg])
-        expect(ratio, `${t.id}: ${fg} on ${bg} = ${ratio.toFixed(2)}`).toBeGreaterThanOrEqual(min)
-      }
-    })
-  }
+  it('Rewind Dark is the default', () => {
+    expect(DEFAULT_THEME).toBe('rewind-dark')
+    expect(resolveTheme(darkInfo).tokens).toEqual(DEFAULT_TOKENS)
+  })
+})
+
+describe('validToken', () => {
+  it('accepts only lower-case six-digit hex colors', () => {
+    for (const bad of ['#FF8800', '#f80', 'ff8800', 'orange', 'rgb(255,136,0)', '#ff8800; background:url(x)', 'var(--x)', '', ' #ff8800', 42, null]) {
+      expect(validToken('color.accent', bad), String(bad)).toBeUndefined()
+    }
+    expect(validToken('color.accent', '#ff8800')).toBe('#ff8800')
+  })
+
+  it('accepts only listed choices', () => {
+    expect(validToken('font.family', 'serif')).toBe('serif')
+    for (const bad of ['Comic Sans', 'serif; color: red', "url('x')", 1]) expect(validToken('font.family', bad)).toBeUndefined()
+  })
+
+  it('checks ranges and steps, and rounds away floating-point noise', () => {
+    expect(validToken('radius.button', 16)).toBe(16)
+    expect(validToken('radius.button', 17)).toBeUndefined()
+    expect(validToken('radius.button', -1)).toBeUndefined()
+    expect(validToken('border.width', 2.5)).toBeUndefined()
+    expect(validToken('border.width', '2')).toBeUndefined()
+    expect(validToken('font.line-height', 1.3 + 7 * 0.05)).toBe(1.65)
+    expect(validToken('font.line-height', 1.52)).toBeUndefined()
+    expect(validToken('spacing.panel', 26)).toBeUndefined()
+    expect(validToken('font.size', Number.NaN)).toBeUndefined()
+    expect(validToken('font.size', Infinity)).toBeUndefined()
+  })
+
+  it('knows no other tokens', () => {
+    expect(validToken('selector', 'body')).toBeUndefined()
+    expect(validToken('__proto__', '#ffffff')).toBeUndefined()
+  })
 })
 
 describe('contrast', () => {
@@ -99,40 +111,9 @@ describe('contrast', () => {
     expect(contrast('#777777', '#ffffff')).toBeCloseTo(4.48, 2)
   })
 
-  it('picks black or white text, whichever is more readable', () => {
-    expect(textOn('#c6ff00')).toBe('#000000')
-    expect(textOn('#3a1fd6')).toBe('#ffffff')
-  })
-})
-
-describe('theme IDs', () => {
-  it('fall back to the default when unknown, outdated or not a string', () => {
-    for (const bad of ['solarized', '', 'REWIND-DARK', null, undefined, 42, { id: 'light' }]) {
-      expect(isThemeId(bad)).toBe(false)
-      expect(themeById(bad).id).toBe('rewind-dark')
-    }
-    expect(themeById('light').name).toBe('Light')
-  })
-})
-
-describe('custom accent', () => {
-  it('accepts only six-digit lower-case hex', () => {
-    const dark = themeById('rewind-dark')
-    for (const bad of ['#FF8800', '#f80', 'ff8800', 'orange', 'rgb(255,136,0)', '#ff8800; background:url(x)', 'var(--x)', '', ' #ff8800']) {
-      expect(accentProblem(bad, dark), bad).toMatch(/six hex digits/)
-    }
-    expect(accentProblem('#ff8800', dark)).toBeUndefined()
-  })
-
-  it('rejects colors that would be unreadable on the theme', () => {
-    expect(accentProblem('#ff8800', themeById('light'))).toMatch(/Too little contrast with the Light background \(1\.9:1/)
-    expect(accentProblem('#111111', themeById('rewind-dark'))).toMatch(/Too little contrast/)
-    expect(accentProblem('#777777', themeById('light'))).toMatch(/Too little contrast/)
-  })
-
-  it('always finds readable text for an accent', () => {
-    // Why accentProblem needs no check of text on the accent: black or white
-    // reaches 4.5:1 on every color. Sampled across the whole color cube.
+  it('always finds readable black or white text for a fill', () => {
+    // Why customized primary and accent colors need no check of the text on
+    // them: black or white reaches 4.5:1 on every color.
     for (let r = 0; r < 256; r += 17)
       for (let g = 0; g < 256; g += 17)
         for (let b = 0; b < 256; b += 17) {
@@ -141,158 +122,194 @@ describe('custom accent', () => {
         }
   })
 
-  it('replaces the accent and its text color only when readable', () => {
-    // A primary that was never chosen follows a custom accent, as buttons did
-    // before there were separate colors.
-    const ok = resolveTheme('rewind-dark', '#ff8800')
-    expect(ok.accentIgnored).toBe(false)
-    expect(ok.colors).toEqual({
-      ...themeById('rewind-dark').colors,
-      accent: '#ff8800',
-      onAccent: '#000000',
-      primary: '#ff8800',
-      onPrimary: '#000000',
-    })
-
-    const unreadable = resolveTheme('light', '#ff8800')
-    expect(unreadable.accentIgnored).toBe(true)
-    expect(unreadable.colors).toEqual(themeById('light').colors)
-
-    for (const injected of ['red;}body{display:none', 'url(https://evil.example/x.png)', 42, null]) {
-      const r = resolveTheme('light', injected)
-      expect(r.colors).toEqual(themeById('light').colors)
+  it('every bundled theme passes every check', () => {
+    for (const info of [darkInfo, lightInfo, oledInfo]) {
+      const { blocking, notes } = checkContrast(resolveTheme(info).tokens)
+      expect([...blocking, ...notes], info.id).toEqual([])
     }
-    expect(resolveTheme('light', '').accentIgnored).toBe(false)
   })
 })
 
-describe('primary, secondary and accent colors', () => {
-  const dark = themeById('rewind-dark')
-
-  it('defaults to the theme: primary is the theme accent, secondary its own fill', () => {
-    for (const t of THEMES) {
-      const r = resolveTheme(t.id, { primary: '', secondary: '', accent: '' })
-      expect(r.colors).toEqual(t.colors)
-      expect(r.colors.primary).toBe(t.colors.accent)
-      expect(r.ignored).toEqual([])
-    }
+describe('resolveTheme', () => {
+  it("uses the theme's own values without a customization", () => {
+    const r = resolveTheme(lightInfo)
+    expect(r.themeId).toBe('light')
+    expect(r.scheme).toBe('light')
+    expect(r.tokens['color.background']).toBe('#f5f5f0')
+    expect(r.tokens['radius.button']).toBe(10)
+    expect(r.ignored).toEqual([])
   })
 
-  it('applies each chosen color independently', () => {
-    const r = resolveTheme('rewind-dark', { primary: '#80b3ff', secondary: '#004466', accent: '#ff8800' })
-    expect(r.colors).toMatchObject({
-      primary: '#80b3ff',
-      onPrimary: '#000000',
-      secondary: '#004466',
-      onSecondary: dark.colors.text, // the theme's text when readable
-      accent: '#ff8800',
-      onAccent: '#000000',
+  it('applies valid, allowed customizations and derives text on customized fills', () => {
+    const r = resolveTheme(darkInfo, { 'color.primary': '#80b3ff', 'color.secondary': '#eeeeee', 'radius.button': 4, 'font.family': 'mono' })
+    expect(r.tokens).toMatchObject({
+      'color.primary': '#80b3ff',
+      'color.on-primary': '#000000',
+      'color.secondary': '#eeeeee',
+      'color.on-secondary': '#000000', // the theme's light text would be unreadable on it
+      'radius.button': 4,
+      'font.family': 'mono',
     })
     expect(r.ignored).toEqual([])
   })
 
-  it('a chosen primary does not follow the accent', () => {
-    expect(resolveTheme('rewind-dark', { primary: '#80b3ff', accent: '#ff8800' }).colors.primary).toBe('#80b3ff')
+  it('ignores tokens the theme does not allow, unknown tokens and invalid values', () => {
+    const r = resolveTheme(oledInfo, {
+      'color.background': '#202020', // OLED keeps black
+      'color.on-primary': '#ffffff', // derived, never customizable
+      selector: 'body',
+      'font.family': 'Papyrus',
+      'color.accent': 'red;}body{display:none',
+    })
+    expect(r.tokens).toEqual(resolveTheme(oledInfo).tokens)
+    expect(r.ignored).toEqual(['color.accent', 'color.background', 'color.on-primary', 'font.family', 'selector'])
   })
 
-  it('text on a light secondary switches away from light theme text', () => {
-    const r = resolveTheme('rewind-dark', { secondary: '#eeeeee' })
-    expect(r.colors.onSecondary).toBe('#000000')
-    expect(contrast(r.colors.onSecondary, '#eeeeee')).toBeGreaterThanOrEqual(MIN_TEXT_CONTRAST)
+  it('ignores colors that would be unreadable, keeping the readable ones', () => {
+    const r = resolveTheme(lightInfo, { 'color.accent': '#ff8800', 'color.secondary': '#aabbcc' })
+    expect(r.ignored).toEqual(['color.accent'])
+    expect(r.tokens['color.accent']).toBe('#3a1fd6')
+    expect(r.tokens['color.secondary']).toBe('#aabbcc')
+    // An unreadable text color, or a background alone that makes text unreadable.
+    expect(resolveTheme(darkInfo, { 'color.text': '#222222' }).ignored).toEqual(['color.text'])
+    expect(resolveTheme(darkInfo, { 'color.background': '#ffffff' }).ignored).toEqual(['color.background'])
   })
 
-  it('primary and accent must be readable; secondary only needs the format', () => {
-    expect(colorProblem('primary', '#3a1fd6', dark)).toMatch(/Too little contrast/)
-    expect(colorProblem('accent', '#3a1fd6', dark)).toMatch(/Too little contrast/)
-    expect(colorProblem('secondary', '#3a1fd6', dark)).toBeUndefined()
-    for (const role of ['primary', 'secondary', 'accent'] as const) {
-      expect(colorProblem(role, 'red', dark), role).toMatch(/six hex digits/)
+  it('accepts colors that are only readable together, and adapts the error color', () => {
+    const lightOnDark = {
+      'color.background': '#ffffff', 'color.surface': '#eeeeee', 'color.text': '#111111', 'color.text-muted': '#555555',
+      'color.border': '#111111', 'color.primary': '#3a1fd6', 'color.accent': '#3a1fd6',
     }
-    expect(colorWarning('secondary', '#eeeeee', dark)).toMatch(/hard to see/)
-    expect(colorWarning('secondary', '#262626', dark)).toBeUndefined()
-    expect(colorWarning('primary', '#eeeeee', dark)).toBeUndefined()
+    const r = resolveTheme(darkInfo, lightOnDark)
+    expect(r.ignored).toEqual([])
+    expect(r.scheme).toBe('light')
+    expect(r.tokens['color.danger']).toBe('#b3001b') // Rewind Dark's red is unreadable on white
+    expect(checkContrast(r.tokens).blocking).toEqual([])
   })
 
-  it('reports unreadable or invalid colors instead of using them', () => {
-    const r = resolveTheme('light', { primary: '#ffff00', secondary: 'url(x)', accent: '#ff8800' })
-    expect(r.ignored.sort()).toEqual(['accent', 'primary', 'secondary'])
-    expect(r.accentIgnored).toBe(true)
-    expect(r.colors).toEqual(themeById('light').colors)
+  it('falls back to the default colors for unreadable or broken theme data', () => {
+    const broken = { id: 'x', tokens: { 'color.background': '#ffffff', 'color.text': '#fefefe' }, customizable: [] }
+    expect(resolveTheme(broken).tokens['color.text']).toBe(DEFAULT_TOKENS['color.text'])
+    expect(resolveTheme(undefined).tokens).toEqual(DEFAULT_TOKENS)
+    expect(resolveTheme({ tokens: 'nope', customizable: 'nope' }, 'nope').tokens).toEqual(DEFAULT_TOKENS)
+  })
+})
+
+describe('cssVariables', () => {
+  it('maps tokens to properties built from fixed values', () => {
+    const vars = cssVariables({
+      ...DEFAULT_TOKENS,
+      'border.width': 3, 'border.style': 'dashed', 'shadow.size': 'none', 'spacing.density': 'compact',
+      'font.size': 18, 'font.heading-scale': 1.2, 'font.weight': 'regular', 'font.family': 'serif', 'radius.small': 2,
+    })
+    expect(vars).toMatchObject({
+      '--rw-border-width': '3px',
+      '--rw-border': '3px dashed #f2f2f2',
+      '--rw-shadow': 'none',
+      '--rw-shadow-offset': '0px',
+      '--rw-space-4': '0.8rem',
+      '--rw-font-size-md': '1.125rem',
+      '--rw-font-size-lg': '1.6875rem',
+      '--rw-heading-scale': '1.2',
+      '--rw-font-weight-bold': '600',
+      '--rw-font-sans': FONT_STACKS.serif,
+      '--rw-radius-xs': '2px',
+      '--rw-focus-ring': '3px solid #c6ff00',
+    })
   })
 
-  it('an ignored accent does not drag the primary along', () => {
-    const r = resolveTheme('light', { accent: '#ff8800' })
-    expect(r.colors.primary).toBe(themeById('light').colors.primary)
-  })
-
-  it('sets tokens on any element, skipping anything that is not a plain color', () => {
-    const el = document.createElement('div')
-    applyTokens(el, { ...dark.colors, secondary: 'red;x:url(y)' })
-    expect(el.style.getPropertyValue('--rw-color-primary')).toBe(dark.colors.primary)
-    expect(el.style.getPropertyValue('--rw-color-secondary')).toBe('')
+  it('never outputs text that is not a valid token value', () => {
+    const vars = cssVariables({ 'color.accent': 'red;}body{display:none', 'font.family': "x'; } * { color: red", 'radius.button': '1px; x' })
+    const all = Object.values(vars).join(' ')
+    expect(all).not.toMatch(/display|url\(|;|\{/)
+    expect(vars['--rw-color-accent']).toBe('#c6ff00')
   })
 })
 
 describe('applying themes', () => {
   afterEach(resetDocument)
 
-  it('sets every token, the color scheme and the browser theme color', () => {
+  it('sets every property, the color scheme and the browser theme color', () => {
     document.head.innerHTML = '<meta name="theme-color" content="#0b0b0b"><meta name="color-scheme" content="dark">'
-    applyTheme(resolveTheme('light', ''))
+    applyTheme(resolveTheme(lightInfo))
     const root = document.documentElement
-    for (const [key, prop] of Object.entries(TOKENS) as [keyof ThemeColors, string][]) {
-      expect(root.style.getPropertyValue(prop), prop).toBe(themeById('light').colors[key])
-    }
+    const vars = cssVariables(resolveTheme(lightInfo).tokens)
+    for (const prop of THEME_VARIABLES) expect(root.style.getPropertyValue(prop), prop).toBe(vars[prop])
     expect(root.style.colorScheme).toBe('light')
     expect(root.dataset.theme).toBe('light')
     expect(document.querySelector('meta[name="theme-color"]')?.getAttribute('content')).toBe('#f5f5f0')
     expect(document.querySelector('meta[name="color-scheme"]')?.getAttribute('content')).toBe('light')
 
     // Switching replaces every value; nothing from the previous theme remains.
-    applyTheme(resolveTheme('oled-black', ''))
-    for (const [key, prop] of Object.entries(TOKENS) as [keyof ThemeColors, string][]) {
-      expect(root.style.getPropertyValue(prop)).toBe(themeById('oled-black').colors[key])
-    }
+    applyTheme(resolveTheme(darkInfo, { 'radius.button': 2 }))
+    applyTheme(resolveTheme(oledInfo))
+    const oledVars = cssVariables(resolveTheme(oledInfo).tokens)
+    for (const prop of THEME_VARIABLES) expect(root.style.getPropertyValue(prop)).toBe(oledVars[prop])
   })
 
-  it('never writes a value that is not a plain color', () => {
-    const bad = resolveTheme('light', '')
-    applyTheme({ ...bad, colors: { ...bad.colors, accent: 'red;background:url(x)' } })
-    expect(document.documentElement.style.getPropertyValue('--rw-color-accent')).toBe('')
-    expect(document.documentElement.getAttribute('style')).not.toContain('url(')
+  it('styles a single element for previews', () => {
+    const el = document.createElement('div')
+    applyTokens(el, resolveTheme(lightInfo).tokens)
+    expect(el.style.getPropertyValue('--rw-color-primary')).toBe('#3a1fd6')
+    expect(document.documentElement.style.getPropertyValue('--rw-color-primary')).toBe('')
+  })
+})
+
+describe('resolveShown', () => {
+  it('shows the active theme with its saved customization', () => {
+    const state = themeState('light', { light: { customization: { 'radius.button': 3 } } })
+    const r = resolveShown(state, null)
+    expect(r.themeId).toBe('light')
+    expect(r.tokens['radius.button']).toBe(3)
   })
 
-  it('remembers the last theme for the next start, ignoring tampered hints', () => {
-    rememberTheme('light', '#3a1fd6')
+  it('shows a preview, with drafts or the saved customization', () => {
+    const state = themeState('rewind-dark', { 'oled-black': { customization: { 'font.size': 18 } } })
+    expect(resolveShown(state, { themeId: 'oled-black' }).tokens['font.size']).toBe(18)
+    expect(resolveShown(state, { themeId: 'oled-black', custom: { 'font.size': 15 } }).tokens['font.size']).toBe(15)
+    expect(resolveShown(state, { themeId: 'oled-black', custom: {} }).tokens['font.size']).toBe(16)
+  })
+
+  it('falls back to the default theme for anything unavailable', () => {
+    const state = themeState('rewind-dark')
+    expect(resolveShown({ ...state, active: 'gone' }, null).themeId).toBe('rewind-dark')
+    expect(resolveShown(state, { themeId: 'gone' }).themeId).toBe('rewind-dark')
+    const invalid = { ...state, active: 'light', items: state.items.map((t) => (t.id === 'light' ? { ...t, state: 'invalid' as const } : t)) }
+    expect(resolveShown(invalid, null).themeId).toBe('rewind-dark')
+  })
+})
+
+describe('remembered theme', () => {
+  afterEach(resetDocument)
+
+  it('applies the last shown theme at the next start', () => {
+    rememberTheme(resolveTheme(lightInfo, { 'radius.button': 4 }))
     applyRememberedTheme()
     expect(document.documentElement.dataset.theme).toBe('light')
-    resetDocument()
+    expect(document.documentElement.style.getPropertyValue('--rw-color-bg')).toBe('#f5f5f0')
+    expect(document.documentElement.style.getPropertyValue('--rw-radius-button')).toBe('4px')
+  })
 
-    // All three colors are remembered.
-    rememberTheme('rewind-dark', { primary: '#80b3ff', secondary: '#004466', accent: '#ff8800' })
-    applyRememberedTheme()
-    expect(document.documentElement.style.getPropertyValue('--rw-color-primary')).toBe('#80b3ff')
-    expect(document.documentElement.style.getPropertyValue('--rw-color-secondary')).toBe('#004466')
-    expect(document.documentElement.style.getPropertyValue('--rw-color-accent')).toBe('#ff8800')
-    resetDocument()
-
-    // A hint written before primary and secondary existed still works.
-    localStorage.setItem('rewind.theme', '{"theme":"rewind-dark","accent":"#ff8800"}')
-    applyRememberedTheme()
-    expect(document.documentElement.style.getPropertyValue('--rw-color-primary')).toBe('#ff8800')
-    resetDocument()
-
-    for (const hint of ['not json', '{"theme":"evil"}', '{"theme":"light","accent":"red;x:url(y)"}', '"light"']) {
+  it('ignores tampered, outdated and invalid hints', () => {
+    for (const hint of [
+      'not json',
+      '"light"',
+      '{"theme":"light","accent":"#3a1fd6"}', // written by the previous version
+      '{"v":2,"theme":"../x","values":{}}',
+      '{"v":3,"theme":"light","values":{}}',
+      '{"v":2,"theme":"light"}',
+    ]) {
       localStorage.setItem('rewind.theme', hint)
       applyRememberedTheme()
-      if (hint.includes('"light"') && hint.startsWith('{')) {
-        // A valid theme with an invalid accent: the theme applies, the accent does not.
-        expect(document.documentElement.style.getPropertyValue('--rw-color-accent')).toBe('#3a1fd6')
-      } else {
-        expect(document.documentElement.dataset.theme, hint).toBeUndefined()
-      }
+      expect(document.documentElement.dataset.theme, hint).toBeUndefined()
       resetDocument()
     }
+    // Invalid values are replaced by defaults; nothing else reaches the page.
+    localStorage.setItem('rewind.theme', JSON.stringify({ v: 2, theme: 'light', values: { 'color.accent': 'red;x:url(y)', 'radius.button': 99 } }))
+    applyRememberedTheme()
+    expect(document.documentElement.style.getPropertyValue('--rw-color-accent')).toBe('#c6ff00')
+    expect(document.documentElement.style.getPropertyValue('--rw-radius-button')).toBe('10px')
+    expect(document.documentElement.getAttribute('style')).not.toContain('url(')
   })
 })
 
@@ -306,7 +323,13 @@ describe('styles', () => {
       styled++
       expect(literal.test(style), file).toBe(false)
     }
-    expect(styled).toBeGreaterThanOrEqual(10)
+    expect(styled).toBeGreaterThanOrEqual(12)
+  })
+
+  it('buttons, inputs and panels use their own shape tokens', () => {
+    expect(appCss).toMatch(/\.rw-button \{[^}]*border-radius: var\(--rw-radius-button\)/)
+    expect(appCss).toMatch(/\.rw-input \{[^}]*border-radius: var\(--rw-radius-input\)/)
+    expect(appCss).toMatch(/\.rw-panel \{[^}]*padding: var\(--rw-space-panel\)/)
   })
 
   it('keeps visible focus and reduced motion in the base styles', () => {

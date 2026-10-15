@@ -92,6 +92,16 @@ the names of music folders, and of files that could not be read.
 
 Plugins are compiled into Rewind and trusted. See [plugins.md](plugins.md).
 
+## Themes
+
+| Variable | Default | Values |
+| --- | --- | --- |
+| `REWIND_THEME_DIR` | *(none: bundled themes only)* | Absolute directory of theme packages (`<id>/theme.json`), outside the data directory, the music folders and the plugin directory, writable only by the administrator, for example `/etc/rewind/themes`. |
+
+Themes are data only (colors and style values, never code) and are read at
+startup. A missing directory or an invalid theme is logged and never stops
+Rewind. See [themes.md](themes.md#installing-a-theme-administrator).
+
 ## Boolean and duration syntax
 
 - Booleans accept `true`/`false`, `1`/`0`, `t`/`f`, and `TRUE`/`FALSE`.

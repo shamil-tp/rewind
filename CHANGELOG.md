@@ -33,6 +33,20 @@ The first public release. Nothing has been released yet.
   primary, secondary and accent colors with contrast checks and a live
   preview. A saved accent color keeps its look: an unchosen primary follows
   it.
+- **Theme and style system:** themes are declarative, versioned manifests
+  (`theme.json`, theme API 1) validated on the server, including WCAG
+  contrast. The bundled themes are now named Rewind Light and Rewind OLED;
+  their IDs are unchanged. **Settings → Theme and style** lists themes with
+  generated previews and compatibility status. It can apply, preview,
+  enable and disable them, and opens a per-theme editor for colors,
+  typography, borders, corner radii, shadows and spacing, with a live
+  preview, Save, Save and apply, Reset and Cancel. Customizations are stored
+  per theme in a new `theme_settings` table (migration `0005_themes`). The
+  earlier custom colors are kept and still apply to themes that were never
+  customized. New endpoints: `GET /api/themes`, `PUT /api/themes/active`,
+  `PUT /api/themes/{id}/enabled`, `PUT /api/themes/{id}/customization`.
+  The optional `REWIND_THEME_DIR` lets the administrator install more
+  themes. There is no upload or download, and themes never contain code.
 - **Rounded neo-brutalist design:** 2px borders and shared corner-radius
   tokens for buttons, inputs, panels, the player and artwork.
 - **Now Playing screen:** opens from the floating mini player (click, tap or
