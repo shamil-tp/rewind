@@ -336,6 +336,38 @@ PLAN_REMOVE=() PLAN_KEEP=()
 un_data plan
 eq "${#PLAN_REMOVE[@]}" 0 "a symlinked data directory is not followed"
 
+# The artwork cache: only its renditions and temporary files are removed.
+STATE_DIR="$tmp/state-art"
+CONF_DATA_DIR=$STATE_DIR
+art="$STATE_DIR/artwork"
+mkdir -p "$art"
+printf 'db' >"$STATE_DIR/rewind.db"
+hash=0123456789abcdef0123456789abcdef
+printf 'jpg' >"$art/$hash-small.jpg"
+printf 'jpg' >"$art/$hash-large.jpg"
+printf 'tmp' >"$art/.tmp-12345"
+printf 'mine' >"$art/my-cover.jpg"
+PLAN_REMOVE=() PLAN_KEEP=()
+un_data plan
+plan=$(printf '%s\n' "${PLAN_REMOVE[@]}")
+keep=$(printf '%s\n' "${PLAN_KEEP[@]}")
+has "$plan" "$art/$hash-small.jpg" "plan removes artwork renditions"
+has "$plan" "$art/.tmp-12345" "plan removes artwork temporary files"
+has "$keep" "$art/my-cover.jpg" "an unknown file in the artwork cache is kept"
+REMOVED=() KEPT=() FAILURES=0
+un_data apply
+no_ test -e "$art/$hash-small.jpg"
+yes_ test -f "$art/my-cover.jpg"
+yes_ test -d "$art"
+eq "$DATA_REMAINS" 1 "data directory kept around the unknown file"
+rm "$art/my-cover.jpg"
+printf 'jpg' >"$art/$hash-large.jpg"
+REMOVED=() KEPT=() FAILURES=0
+un_data apply
+no_ test -e "$art"
+no_ test -e "$STATE_DIR"
+eq "$DATA_REMAINS" 0 "a data directory holding only the artwork cache is removed completely"
+
 for n in rewind-20261014T000000Z-before-v1.2.0.db rewind.env.20261014T000000Z-before-change; do yes_ backup_name_ok "$n"; done
 for n in notes.txt rewind.db "rewind-../x.db" rewind-x.db.bak rewind.env "rewind.env.a b"; do no_ backup_name_ok "$n"; done
 

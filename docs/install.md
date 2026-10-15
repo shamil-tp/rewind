@@ -192,7 +192,7 @@ repair it.
 | `/opt/rewind/current` | symlink to the active release | root |
 | `/etc/rewind/rewind.env` | configuration (environment variables, no secrets) | root:rewind, 0640 |
 | `/etc/rewind/install-manifest` | what the installer created, so that uninstalling removes only that | root, 0644 |
-| `/var/lib/rewind/` | database and the one-time setup code; never touched when installing, updating or repairing | rewind, 0700 |
+| `/var/lib/rewind/` | database, the one-time setup code and the `artwork` cache (rebuilt from your music when missing); never touched when installing, updating or repairing | rewind, 0700 |
 | `/var/backups/rewind/` | database copies made before updates and rollbacks, configuration copies made before changes | root, 0700 |
 | `/etc/systemd/system/rewind.service` | the systemd unit (never overwritten later) | root, 0644 |
 | `/etc/systemd/system/rewind.service.d/50-installer.conf` | only if needed: waits for the network (LAN or Tailscale IP) and for music drives at boot | root, 0644 |
@@ -467,7 +467,7 @@ to it. The uninstaller first shows what it found, then offers:
 | --- | --- | --- |
 | **1. Application only** (default) | the service (stopped and disabled), `rewind.service`, the installer's drop-in, `/opt/rewind` (all releases), `rewind-ctl` | configuration, database, playlists, preferences, backups, the `rewind` user |
 | **2. Application and configuration** | everything in 1, plus `/etc/rewind` (a copy of `rewind.env` is saved to `/var/backups/rewind/` first) | database, playlists, preferences, backups, the `rewind` user |
-| **3. Complete purge** (destructive) | everything in 2, plus the database and setup code in `/var/lib/rewind`, the `rewind` user and group, and, only if you say so separately, the backups | anything listed below |
+| **3. Complete purge** (destructive) | everything in 2, plus the database, setup code and artwork cache in `/var/lib/rewind`, the `rewind` user and group, and, only if you say so separately, the backups | anything listed below |
 
 Before removing anything, it lists the exact paths to be removed and kept,
 and asks for confirmation. A purge requires typing `PURGE` in capitals; any

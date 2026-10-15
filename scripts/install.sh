@@ -77,6 +77,8 @@ REPO_URL=https://github.com/shamil-tp/rewind
 MARKER_RE='^# rewind-installer:'
 # Files Rewind itself writes in its data directory.
 DATA_FILES="rewind.db rewind.db-journal rewind.db-wal rewind.db-shm setup-code"
+# The artwork cache directory in the data directory (see un_artwork).
+ARTWORK_DIR_NAME="artwork"
 
 B="" D="" R="" G="" Y="" N=""
 WIZARD=0
@@ -2685,9 +2687,13 @@ un_data() {
 		fi
 	done
 	dir_entries "$STATE_DIR"
-	for e in "${ENTRIES[@]}"; do
+	# un_artwork calls dir_entries too, which replaces ENTRIES.
+	local -a data_entries=("${ENTRIES[@]}")
+	for e in "${data_entries[@]}"; do
 		if [[ " $DATA_FILES " == *" $e "* ]] && real_file "$STATE_DIR/$e"; then
 			remove_item "$mode" "$STATE_DIR/$e" rm -f -- "$STATE_DIR/$e"
+		elif [ "$e" = "$ARTWORK_DIR_NAME" ] && real_dir "$STATE_DIR/$e" && owner_is "$STATE_DIR/$e" "$SERVICE_USER"; then
+			un_artwork "$mode" "$STATE_DIR/$e" || kept=$((kept + 1))
 		else
 			keep_item "$mode" "$STATE_DIR/$e (not a file Rewind creates)"
 			kept=$((kept + 1))
@@ -2702,6 +2708,30 @@ un_data() {
 	if [ "$mode" = apply ]; then
 		if exists "$STATE_DIR"; then DATA_REMAINS=1; else DATA_REMAINS=0; fi
 	fi
+}
+
+# un_artwork removes the artwork cache Rewind keeps in its data directory:
+# only files named like its renditions (<32 hex>-small.jpg, -large.jpg) and
+# its temporary files (.tmp-*). Anything else is kept, and so is the
+# directory. Returns 1 when something was kept.
+artwork_name_ok() { [[ $1 =~ ^[0-9a-f]{32}-(small|large)\.jpg$ || $1 =~ ^\.tmp-[A-Za-z0-9]+$ ]]; }
+
+un_artwork() {
+	local mode=$1 dir=$2 e kept=0
+	dir_entries "$dir"
+	for e in "${ENTRIES[@]}"; do
+		if artwork_name_ok "$e" && real_file "$dir/$e"; then
+			remove_item "$mode" "$dir/$e" rm -f -- "$dir/$e"
+		else
+			keep_item "$mode" "$dir/$e (not a file Rewind creates)"
+			kept=$((kept + 1))
+		fi
+	done
+	if [ "$kept" -eq 0 ]; then
+		remove_item "$mode" "$dir" rmdir -- "$dir"
+		return 0
+	fi
+	return 1
 }
 
 backup_name_ok() { [[ $1 =~ ^rewind-[A-Za-z0-9._+-]+\.db$ || $1 =~ ^rewind\.env\.[A-Za-z0-9._+-]+$ ]]; }
