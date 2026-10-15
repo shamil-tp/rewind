@@ -40,9 +40,9 @@ describe('SettingsView: library and playback', () => {
   it('shows the saved values; Save is enabled only after a change', async () => {
     render(SettingsView, { props: props({ preferences: prefs({ library_sort: 'added', autoplay_next: false }) }) })
     expect((screen.getByLabelText('Library sort order') as HTMLSelectElement).value).toBe('added')
-    expect((screen.getByLabelText('Continue playlists') as HTMLInputElement).checked).toBe(false)
+    expect((screen.getByLabelText('Continue playing') as HTMLInputElement).checked).toBe(false)
     expect(save().disabled).toBe(true)
-    await fireEvent.click(screen.getByLabelText('Continue playlists'))
+    await fireEvent.click(screen.getByLabelText('Continue playing'))
     expect(save().disabled).toBe(false)
   })
 
@@ -65,13 +65,13 @@ describe('SettingsView: library and playback', () => {
     mockFetch({ 'PATCH /api/preferences': () => json(500, { error: { code: 'internal_error', message: 'x' } }) })
     const p = props()
     render(SettingsView, { props: p })
-    await fireEvent.click(screen.getByLabelText('Continue playlists'))
+    await fireEvent.click(screen.getByLabelText('Continue playing'))
     await fireEvent.click(save())
     expect((await screen.findByRole('alert')).textContent).toBe('Not saved: The server had a problem. Try again.')
     expect(p.onSaved).not.toHaveBeenCalled()
     expect(screen.queryByText('Settings saved.')).toBeNull()
     // The unsaved change is kept for another try.
-    expect((screen.getByLabelText('Continue playlists') as HTMLInputElement).checked).toBe(false)
+    expect((screen.getByLabelText('Continue playing') as HTMLInputElement).checked).toBe(false)
     expect(save().disabled).toBe(false)
   })
 
@@ -79,7 +79,7 @@ describe('SettingsView: library and playback', () => {
     mockFetch({ 'PATCH /api/preferences': () => apiError(401, 'unauthenticated', 'sign in required') })
     const p = props()
     render(SettingsView, { props: p })
-    await fireEvent.click(screen.getByLabelText('Continue playlists'))
+    await fireEvent.click(screen.getByLabelText('Continue playing'))
     await fireEvent.click(save())
     await vi.waitFor(() => expect(p.onUnauthorized).toHaveBeenCalled())
   })
@@ -97,6 +97,24 @@ describe('SettingsView: library and playback', () => {
   it('shows a loading state', () => {
     render(SettingsView, { props: props({ status: 'loading' }) })
     expect(screen.getByText('Loading settings…')).toBeTruthy()
+  })
+})
+
+describe('SettingsView: listening history', () => {
+  it('saves the privacy mode and the play threshold', async () => {
+    const stored = prefs({ record_history: false, play_threshold_percent: 70 })
+    const fetch = mockFetch({ 'PATCH /api/preferences': () => json(200, { preferences: stored }) })
+    const p = props()
+    render(SettingsView, { props: p })
+    const threshold = screen.getByLabelText('Count a play after') as HTMLInputElement
+    expect(threshold.value).toBe('50')
+    await fireEvent.input(threshold, { target: { value: '70' } })
+    await fireEvent.click(screen.getByLabelText('Record listening history'))
+    // Without history, the threshold does not matter and is disabled.
+    expect(threshold.disabled).toBe(true)
+    await fireEvent.click(save())
+    await vi.waitFor(() => expect(p.onSaved).toHaveBeenCalledWith(stored))
+    expect(patches(fetch)).toEqual([{ play_threshold_percent: 70, record_history: false }])
   })
 })
 

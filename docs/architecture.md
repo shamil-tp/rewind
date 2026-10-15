@@ -1,6 +1,7 @@
 # Rewind Architecture
 
-Status: **Phase 12.** Sections marked *implemented* describe working code. All
+Status: **Phase 12, plus the specification's "Phase 2" listening experience
+(§5f).** Sections marked *implemented* describe working code. All
 other sections describe intended behavior and are updated as each phase lands.
 
 ## 1. Goals and constraints
@@ -65,8 +66,10 @@ internal/metadata/   read-only tag/property reader wrapping go-taglib
 internal/library/    library roots (SyncRoots), scanner (walker, bounded
                      readers, batched writer), reconciliation, scan history,
                      background scan queue (Start/Queued/Close), the
-                     read-only Catalog used by the library API, and the
-                     per-user Playlists store
+                     read-only Catalog used by the library API, the
+                     per-user Playlists store, albums and artists (browse),
+                     metadata edits, favorites and history (personal),
+                     the saved queue (playback) and the artwork cache (§5f)
 internal/prefs/      per-user preferences: allowlisted keys, defaults, storage
 internal/plugin/     plugin API (Plugin, Host, ScanEvent), compile-time registry,
                      manifest validation, discovery, lifecycle manager
@@ -538,6 +541,234 @@ Details, the security model and the contributor guide are in
 - **Config.** `REWIND_PLUGIN_DIR` (absolute, may not overlap the data
   directory or library roots) and `REWIND_PLUGINS`; both validated at startup.
 
+## 5f. Listening experience (*implemented*, product specification "Phase 2")
+
+The product specification in the repository root (`ARCHITECTURE.md`) groups
+features into its own phases. Its "Phase 2 — Complete listening experience"
+was implemented after CLAUDE.md Phase 12; this section describes the result.
+
+### Audit findings that shaped the design
+
+- `ARCHITECTURE.md` (repository root) is a **product specification**, not a
+  description of the code; this file (`docs/architecture.md`) is the
+  implementation architecture. They are kept separate on purpose; the root
+  file's "Implementation status" note points here.
+- The specification's "Phase 1" assumes a queue, favorites and
+  album/artist/folder browsing. Before this work Rewind had none of them:
+  only a track list, playlists played as a fixed sequence by `Shell`, and a
+  player component that owned the `<audio>` element. Queue, favorites,
+  albums and artists were therefore built as part of this phase; **folder
+  browsing remains deferred**.
+- Metadata was stored only in SQLite; the extractor is strictly read-only.
+  Rewind never wrote tags, and still does not (see "Metadata editing").
+- There was no artwork at all ("no artwork API yet"), and the scanner's
+  rename merge only moved playlist entries; it now also moves favorites,
+  history and re-applies metadata edits.
+
+### Backend
+
+| File | Responsibility |
+| --- | --- |
+| `internal/library/browse.go` | Albums and artists derived from tags (no tables): grouping keys, base64url IDs, album/artist lists and details |
+| `internal/library/edits.go` | Database-backed metadata edits: validation, optimistic concurrency (`tracks.revision`), revert, album and artist bulk edits, `ReapplyEdits` for the scanner |
+| `internal/library/personal.go` | Favorites, listening history, play counts, recent and top tracks, `Annotate` (per-user fields on any track list) |
+| `internal/library/playback.go` | The saved play queue and settings (`playback_state`) |
+| `internal/library/artwork.go` | Artwork extraction (embedded or sidecar), validation, renditions, cache records and cleanup |
+| `internal/library/playlists.go` | Adds bulk add, duplicate and artwork choice |
+| `internal/metadata` | Adds `Composer`, `Lyrics`, `ReadArtwork` (read-only) and `Version` |
+| `internal/server/listening.go` | HTTP handlers for all of the above; all behind `requireAuth` and the existing CSRF protection, scoped to the signed-in user |
+
+**Migration `0006_listening`** (additive; nothing changed or removed):
+`tracks.composer`, `tracks.lyrics`, `tracks.metadata_version`,
+`tracks.revision`; expression index `tracks_album_key`; tables
+`track_edits`, `favorites`, `play_history`, `playback_state`,
+`track_artwork`; `playlists.artwork_track_id`. Tested by an upgrade test that
+starts from 0005 with data (`internal/db`).
+
+**Albums and artists.** An album groups tracks by
+`lower(coalesce(album_artist, artist, '')) || char(31) || lower(album)`, the
+same rule the library summary already used for its album count. The
+expression is indexed (partial index on `album IS NOT NULL`; a test checks
+the query plan uses it). Artists split credit fields on `"; "`, the
+separator the scanner uses for multi-value tags; artist lists aggregate one
+row per distinct (artist, album artist, album) combination in Go. IDs are
+base64url-encoded grouping keys: stable, and changing only when the tags
+do. Decision: no `albums`/`artists` tables, because derived groups can never
+drift from tracks or edits, and the library is small enough that grouping
+queries are cheap. Compilations without an album artist split per artist;
+the album editor (set the album artist) fixes that.
+
+**Metadata editing (database-only).** Rewind never writes tags into files.
+An edit overwrites the column in `tracks` (so every query, search and
+grouping uses it with no extra cost) and is recorded in `track_edits`
+(`fields`: edited values; `original`: the file's values for those fields).
+When the scanner re-reads a changed file it writes the fresh tag values,
+then `ReapplyEdits` stores them as the new originals and applies the edits
+again; the rename merge does the same. A change back to the file's value
+drops the edit; revert restores originals per field. Every metadata write
+increments `tracks.revision`; edits must send the revision they read
+(`409 edit_conflict` otherwise). Album edits and artist renames apply the
+same edit machinery to every track of the group in one transaction, guarded
+by a version hash over the group's IDs and revisions. Embedded tag writing
+is deliberately not implemented; it would be a separate, explicit
+capability.
+
+`metadata.Version` (now 1) records which extractor read a file; files read
+by an older version are re-read once on the next scan even if unchanged, so
+existing libraries get composer and lyrics without a full manual rescan.
+
+**Listening history.** `play_history` stores one row per **qualified** play
+(only those are sent), referencing `tracks` (no copied track data). A random
+client-generated `play_key`, unique per user, makes retries idempotent. Play
+counts and last-played times are aggregates over the history (indexed by
+user, track and time), so they always agree with it. Tracks are never
+deleted when files disappear (they are marked `missing`), so history
+survives; the UI distinguishes "File missing" (`status: missing`) from
+"Unavailable" (drive unplugged or root disabled). Preferences add
+`play_threshold_percent` (10–100, default 50; capped at four minutes) and
+`record_history` (privacy mode, enforced by the server).
+
+**Playback state.** `playback_state` holds one validated JSON document per
+user: queue (track IDs, duplicates allowed), the pre-shuffle order, index,
+position, shuffle, repeat, speed and context. Writes carry a client revision
+(milliseconds since the epoch, always increasing); the server keeps the
+document only if the revision is newer (`409 stale_state` otherwise), so a
+late request never overwrites a newer queue. Volume and mute are per device
+(`localStorage` key `rewind.player`), not per user.
+
+**Artwork.** On first request for a track: open the file through
+`OpenTrack` (same containment rules as streaming), read its embedded picture
+with go-taglib's read-only reader, or else a sidecar cover in the same
+folder through `os.Root`. Images are validated before decoding (format
+JPEG/PNG/GIF, ≤16 MiB, ≤12,000 px per side, ≤25 Mpx), then scaled with a
+bounded box filter (standard library only, no image dependency) to 320 px
+and 1000 px JPEGs in `<data dir>/artwork/<hash>-<size>.jpg`. The hash is of
+the source image, so an album's tracks share files. `track_artwork` records
+the result (including "none") against the file size and mtime stored by the
+scanner; extraction runs at most twice concurrently and once per track at a
+time. Responses are `private, max-age=86400` with an ETag. When a drive is
+unplugged, the last rendition is served. `Cleanup` (run in the background at
+startup) removes renditions no track refers to and leftover temporary files,
+and only touches file names the cache creates. The cache is regenerable and
+need not be backed up.
+
+### Frontend
+
+**One playback engine** (`web/src/services/player.svelte.ts`): a class with
+Svelte 5 `$state` fields and a single `<audio>` element created once
+(`attach`, from `Shell`) and appended to `<body>`, outside every component.
+All views (mini player, Now Playing, queue panel, track lists, keyboard
+shortcuts, browser media controls) read the same state and call the same
+actions, so navigation never touches playback. Listeners are added once
+and removed on `detach` (sign-out).
+
+- Each load gets a token; asynchronous work (error probes, network retries,
+  restore) checks it, so a late result never affects a newer track.
+- Errors are explained with a `HEAD` probe of the stream (401 sign-in, 404
+  missing file, 409 unconfigured folder, 503 unplugged drive, 200 codec not
+  supported). An unreachable server triggers up to five retries, on the
+  `online` event or with back-off, resuming at the same position. A track
+  that fails while advancing on its own is skipped after a short notice.
+- Seeking uses the browser's Range requests; nothing is downloaded into
+  JavaScript.
+- The queue is saved (debounced 0.8 s, plus the position every 15 s, on
+  pause and with `keepalive` on `pagehide`) and restored at sign-in **without
+  starting audio** ("Press play to resume").
+- History: listened time counts only small forward steps while playing
+  (seeks do not count). At the threshold, one `POST /api/history` is sent
+  with a new random play key per playback (repeat-one replays get a new
+  key); failures retry with the same key.
+- Media Session metadata and actions (lock screen, headset keys) where the
+  browser supports them.
+
+**Queue rules** (`services/queue.ts`, pure functions, unit-tested):
+
+- Entries wrap tracks with a unique key, so a track can be queued twice and
+  keeps its identity while moving. Moving entries never changes which entry
+  is current.
+- *Play now* inserts after the current entry and plays it; *Play next*
+  inserts after the current entry; *Add to queue* appends. Choosing a track
+  in a list (album, artist, playlist, library or search results, history)
+  replaces the queue with that list, starting at the track.
+- Next skips unavailable tracks; at the end, repeat all wraps, otherwise
+  playback stops ("End of the queue"). Repeat one replays only when a track
+  ends on its own. Previous restarts the track after 3 s, otherwise goes to
+  the previous available track (wrapping with repeat all).
+- Removing the current entry plays the following one (or the new last one),
+  if it was playing.
+- Shuffle shuffles only upcoming entries and keeps the original order;
+  turning it off restores that order around the current entry. Tracks added
+  while shuffled keep their place in the play order and are inserted after
+  the current track (play next) or at the end (add to queue) of the
+  original order. "Shuffle" buttons start a list in random order.
+- The preference "Continue playing" (`autoplay_next`) decides whether the
+  next track starts when one ends.
+
+**Components.**
+
+| Component | Responsibility |
+| --- | --- |
+| `Player` | Mini player and Now Playing screen (artwork, favorite, shuffle/repeat, volume/mute, speed, ±10 s, remaining time, lyrics, track information, album/artist links, track menu, focus trap, swipe gestures) |
+| `QueuePanel` | Current, up next (drag and drop plus ↑/↓), played; remove, clear upcoming, clear with confirmation, save as playlist |
+| `TrackMenu` | Play now/next, add to queue, add to playlist, favorite, go to album/artist, edit details, view-specific extras; keyboard, right-click, Shift+F10; bottom sheet on phones |
+| `TrackList` | Shared track rows (album, artist, history, favorites, top tracks): current marker in text, disc headings, favorites, selection |
+| `BrowseGrid` | Album and artist grids with search, sort and paging |
+| `AlbumView`, `ArtistView` | Detail pages with actions, album editor, artist rename |
+| `HistoryView`, `FavoritesView` | History (recent, most played, filtered list, bulk actions) and favorites |
+| `MetadataEditor` | Track details dialog (database-only notice, validation, unsaved state, per-field revert, conflict handling) |
+| `ShortcutsDialog`, `services/shortcuts.ts` | Shortcut reference and the single global key handler |
+| `Artwork`, `Icon` | Shared artwork (lazy, square, placeholder and fallback) and icon set |
+| `services/listening.svelte.ts` | Cross-view consistency: favorite overrides, `libraryVersion` and `historyVersion` counters that views watch to reload, one live region for announcements |
+| `services/ui.svelte.ts` | Overlays (queue, Now Playing, editor, shortcuts) and focus return |
+
+Routes (hash router in `Shell`): `#/library`, `#/albums[/{id}]`,
+`#/artists[/{id}]`, `#/playlists[/{id}]`, `#/favorites`, `#/history`,
+`#/settings`, `#/status`. Views stay mounted while hidden, so lists keep
+their state.
+
+**Keyboard shortcuts** (one `window` listener in `Shell`): Space play/pause,
+←/→ seek 10 s, Shift+←/→ previous/next, `-`/`+` volume, M mute, S shuffle,
+R repeat, F favorite, Q queue, N Now Playing, `/` search, `?` reference,
+Esc closes the topmost overlay. They never fire while typing (text fields,
+selects, ranges), never use Ctrl/Alt/Meta combinations, keep Space and
+Enter on focused buttons, and only Escape works while a modal dialog is open.
+
+**Responsive layout.** Desktop: sidebar, main content, floating mini player,
+queue as a side panel. Tablets (≤64 rem): the sidebar can collapse to icons
+(remembered per device); the mini player drops shuffle, repeat and the
+volume slider. Phones (≤48 rem): bottom navigation (Library, Albums,
+Artists, Playlists, More), a compact mini player above it, full-screen Now
+Playing, menus as bottom sheets, safe-area insets, 44 px touch targets, no
+hover-only actions.
+
+### Testing
+
+`go test ./...` (library: albums/artists, index use, edits across rescans
+and renames, history idempotency, playback state validation and staleness,
+artwork embedded/sidecar/cache/cleanup/limits; server: auth and CSRF on
+every new route, API flows; db: 0006 upgrade) and `npm test` in `web/`
+(queue rules, engine transitions, repeat/shuffle, history recording,
+persistence and restore, components, and Shell integration flows: album
+playback across navigation, restoring the queue, shortcuts, queue
+reordering, metadata editing). A manual smoke test against the real binary
+is described in the Phase 2 report.
+
+### Known limitations and deferred features
+
+- Folder browsing, smart playlists, statistics pages, lyrics editing UI
+  beyond the metadata editor, custom artwork uploads, crossfade/gapless,
+  and an output-device selector are not implemented.
+- Album grouping depends on tags; compilations need an album artist.
+- Artist lists are aggregated in Go from one row per distinct credit
+  combination; very large libraries (hundreds of thousands of tracks) have
+  not been measured.
+- Embedded tags are never written; edits live in Rewind's database (back it
+  up to keep them).
+- Playback state is per user, not per device: two devices playing at once
+  save over each other (the newest save wins).
+- Visual layout was verified by component tests and the production build,
+  not yet by a browser-automation run on real devices.
+
 ## 6. Audio streaming (*implemented*, Phase 5)
 
 - **Route:** `GET|HEAD /api/tracks/{id}/stream` (`internal/server/library.go`),
@@ -636,7 +867,7 @@ Details, the security model and the contributor guide are in
       running scan. The library list then reloads.
   - Any `401` returns to the sign-in screen with "Your session has expired".
   - **The design** stays a music player, not a dashboard: no cards grid, no
-    artwork (there is no artwork API yet, and none is faked), restrained
+    artwork at the time (artwork was added later, §5f), restrained
     accent, and system fonts.
 - *Implemented (Phase 5, extended in Phase 6):*
   - `Player` is now a fixed bottom bar. It respects
@@ -652,7 +883,7 @@ Details, the security model and the contributor guide are in
     the browser cannot decode.
   - Clearing or replacing the track pauses and removes the old source. No
     audio is downloaded into JavaScript; there are no Blob or base64 URLs.
-  - A play queue and artist/album pages belong to later phases.
+  - A play queue and artist/album pages came later (§5f).
 - *Implemented (Phase 8): playlists and settings.*
   - `PlaylistsView` lists and creates playlists. `PlaylistDetail` plays,
     renames (name and description), deletes (after an inline confirmation)
@@ -668,7 +899,8 @@ Details, the security model and the contributor guide are in
     *available* track (`services/sequence.ts`), never wrapping around. The
     end of a track advances only when `autoplay_next` is on. Choosing a
     track in the library leaves the playlist. This is a sequence, not a
-    queue: there is no "play next" or shuffle.
+    queue: there is no "play next" or shuffle. (Superseded by the play
+    queue in §5f: playlists now play through the shared queue.)
   - `Shell` loads `GET /api/preferences` once and renders the library after
     it answers, so the library loads once, in the saved order. If the request
     fails, defaults are used and `SettingsView` shows the error with a retry
@@ -725,8 +957,8 @@ Details, the security model and the contributor guide are in
     returns to the mini player. Pull-up and pull-down gestures count only
     when they start on the mini player's track info or the screen's header,
     never on the seek bar. Previous and next appear only while a playlist
-    plays. There is no artwork API, so a placeholder is shown, and there are
-    no shuffle, repeat or volume controls, because none exist.
+    plays. (§5f replaced this: the player is now a view of the shared
+    playback engine, with artwork, shuffle, repeat, volume and speed.)
 - *Implemented (after Phase 12): theme and style system.* Details, the
   manifest schema and the token contract are in [themes.md](themes.md).
   - **Model.** A theme is a declarative manifest (`theme.json`, schema 1,
@@ -1109,6 +1341,7 @@ Phase 10 still performs the full endpoint-by-endpoint review.
 | later | Resource measurement on the owner's actual hardware. |
 | 12 | Packaging and release readiness (CLAUDE.md "Phase 11" scope). Release packaging was implemented earlier (see "CI/CD" above). Phase 12 adds: the hardened systemd unit and server configuration template in `release/`, `install.sh` (install, upgrade, rollback, status), an end-to-end installation test run in CI (`install-test.sh`), `release-check.sh`, the installation, configuration and operations guides, SECURITY.md, CONTRIBUTING.md, CHANGELOG.md and issue templates. It also fixes security-audit F8: taglib's compiled-code cache is moved out of the shared `/tmp`. No new features, no schema change and no new dependency. |
 | UI | Theme and style system: declarative theme manifests (theme API 1) validated on the server, bundled Rewind Dark/Light/OLED, optional administrator theme directory (`REWIND_THEME_DIR`), migration `0005_themes` (per-theme customization, enabled flag), theme API endpoints, Settings theme cards and per-theme editor with live preview. Earlier custom colors kept as "legacy" customization. No upload/download, no theme code, no new dependency. |
+| Spec Phase 2 | Listening experience (§5f): shared playback engine with a persisted per-user queue, shuffle/repeat/volume/speed, Now Playing and mini player, albums and artists derived from tags, artwork extraction and cache, favorites, listening history with idempotent qualified plays and play counts, database-only metadata editor (edits survive rescans), playlist duplicate/bulk add/artwork/drag and drop, keyboard shortcuts, responsive navigation. Migration `0006_listening`. No new dependency. |
 
 ### Phase 1 acceptance criteria (as amended)
 
@@ -1164,8 +1397,8 @@ purging missing tracks and disabled roots, indexes for the library API
 (only if measurements on the target hardware call for them), an owner/role
 column if more accounts are ever added, a trusted reverse-proxy model
 (deliberately not implemented in Phase 7: forwarding headers are ignored),
-WAL mode (only if contention is measured), artwork cache and thumbnails
-(3/7), Media Session lock-screen controls, hot reload of the theme directory, plugin trust model, a container image (Phase 12
+WAL mode (only if contention is measured), custom artwork uploads,
+folder browsing, smart playlists, Media Session lock-screen controls, hot reload of the theme directory, plugin trust model, a container image (Phase 12
 chose a native systemd installation; no image is published), Debian/Ubuntu
 packages (`.deb`), signed releases, and arm64 builds (after amd64 is
 stable, and only once tested).

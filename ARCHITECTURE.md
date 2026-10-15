@@ -1,5 +1,23 @@
 # REWIND — Complete Music Player Feature, Functionality & UI/UX Specification
 
+> **Implementation status (maintained by the developers).** This file is the
+> product specification: it describes the intended product, not the code. The
+> verified implementation architecture, decisions and limitations are in
+> [docs/architecture.md](docs/architecture.md), and the API in
+> [docs/api.md](docs/api.md).
+>
+> - **Phase 2 — Complete listening experience** (section 59) is implemented;
+>   see docs/architecture.md §5f. It includes the parts of "Phase 1" it
+>   depends on that did not exist yet: the play queue, favorites, and album and
+>   artist browsing.
+> - Not yet implemented from "Phase 1": folder browsing and a separate search
+>   page (search is part of the Library, Albums, Artists and History views).
+> - Metadata editing is **database-only** (section 22.2): Rewind never writes
+>   tags into music files. Embedded-tag writing is not implemented.
+> - Phases 3–5 of this specification are not started, except the theme
+>   system, PWA installation, browser media controls and backup/restore
+>   documentation, which exist from earlier work.
+
 ## 1. PRODUCT OVERVIEW
 
 Build a modern, self-hosted music player inspired by Spotify, Apple Music, and Plexamp, designed primarily for playing and organizing a personal music collection.

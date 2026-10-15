@@ -56,6 +56,12 @@ type Options struct {
 	Preferences *prefs.Store
 	// Themes stores per-user theme settings over the theme registry.
 	Themes *theme.Store
+	// Personal stores favorites and listening history; Editor metadata
+	// edits; Playback the saved play queue; Artwork the artwork cache.
+	Personal *library.Personal
+	Editor   *library.Editor
+	Playback *library.PlaybackStore
+	Artwork  *library.ArtworkCache
 	// MaxPageSize caps the limit parameter of paginated endpoints
 	// (default config.DefaultMaxPageSize).
 	MaxPageSize int
@@ -76,8 +82,10 @@ func New(opts Options) (http.Handler, error) {
 // additional routes and receives the authentication middleware.
 func newHandler(opts Options, extra func(mux *http.ServeMux, requireAuth func(http.Handler) http.Handler)) (http.Handler, error) {
 	if opts.Auth == nil || opts.Limiter == nil || opts.Logger == nil || opts.Catalog == nil || opts.Scanner == nil ||
-		opts.Playlists == nil || opts.Preferences == nil || opts.Themes == nil {
-		return nil, errors.New("server: Auth, Limiter, Logger, Catalog, Scanner, Playlists, Preferences and Themes are required")
+		opts.Playlists == nil || opts.Preferences == nil || opts.Themes == nil || opts.Personal == nil || opts.Editor == nil ||
+		opts.Playback == nil || opts.Artwork == nil {
+		return nil, errors.New("server: Auth, Limiter, Logger, Catalog, Scanner, Playlists, Preferences, Themes, Personal, " +
+			"Editor, Playback and Artwork are required")
 	}
 	if opts.MaxPageSize <= 0 {
 		opts.MaxPageSize = config.DefaultMaxPageSize
@@ -100,7 +108,7 @@ func newHandler(opts Options, extra func(mux *http.ServeMux, requireAuth func(ht
 
 	// Library API: every route requires a session. The only account is the
 	// owner, so the session is also the authorization for rescans.
-	l := &libraryAPI{catalog: opts.Catalog, scanner: opts.Scanner, maxPageSize: opts.MaxPageSize, logger: opts.Logger}
+	l := &libraryAPI{catalog: opts.Catalog, scanner: opts.Scanner, personal: opts.Personal, maxPageSize: opts.MaxPageSize, logger: opts.Logger}
 	protected := func(h http.HandlerFunc, methods ...string) http.Handler {
 		return noStore(allowMethods(a.requireAuth(h), methods...))
 	}
@@ -113,12 +121,35 @@ func newHandler(opts Options, extra func(mux *http.ServeMux, requireAuth func(ht
 	mux.Handle("/api/tracks/{id}/stream", allowMethods(a.requireAuth(http.HandlerFunc(l.stream)), http.MethodGet, http.MethodHead))
 
 	// Playlists and preferences belong to the signed-in user.
-	p := &playlistAPI{playlists: opts.Playlists, prefs: opts.Preferences, logger: opts.Logger}
+	p := &playlistAPI{playlists: opts.Playlists, prefs: opts.Preferences, personal: opts.Personal, logger: opts.Logger}
 	mux.Handle("/api/playlists", protected(p.collection, http.MethodGet, http.MethodHead, http.MethodPost))
 	mux.Handle("/api/playlists/{id}", protected(p.item, http.MethodGet, http.MethodHead, http.MethodPatch, http.MethodDelete))
 	mux.Handle("/api/playlists/{id}/tracks", protected(p.tracks, http.MethodPost, http.MethodPut))
 	mux.Handle("/api/playlists/{id}/tracks/{trackId}", protected(p.entry, http.MethodDelete))
+	mux.Handle("/api/playlists/{id}/duplicate", protected(p.duplicate, http.MethodPost))
+	mux.Handle("/api/playlists/{id}/artwork", protected(p.artwork, http.MethodPut))
 	mux.Handle("/api/preferences", protected(p.preferences, http.MethodGet, http.MethodHead, http.MethodPatch))
+
+	// Listening: albums, artists, artwork, metadata edits, favorites,
+	// history and the saved queue, all per signed-in user.
+	ls := &listeningAPI{catalog: opts.Catalog, personal: opts.Personal, editor: opts.Editor, playback: opts.Playback,
+		artwork: opts.Artwork, prefs: opts.Preferences, maxPageSize: opts.MaxPageSize, logger: opts.Logger}
+	mux.Handle("/api/albums", protected(ls.albums, http.MethodGet, http.MethodHead))
+	mux.Handle("/api/albums/{id}", protected(ls.album, http.MethodGet, http.MethodHead))
+	mux.Handle("/api/albums/{id}/metadata", protected(ls.editAlbum, http.MethodPatch))
+	mux.Handle("/api/artists", protected(ls.artists, http.MethodGet, http.MethodHead))
+	mux.Handle("/api/artists/{id}", protected(ls.artist, http.MethodGet, http.MethodHead))
+	mux.Handle("/api/artists/{id}/name", protected(ls.editArtist, http.MethodPatch))
+	// Artwork manages its own caching headers (private, revalidated by ETag).
+	mux.Handle("/api/tracks/{id}/artwork", allowMethods(a.requireAuth(http.HandlerFunc(ls.trackArtwork)), http.MethodGet, http.MethodHead))
+	mux.Handle("/api/tracks/{id}/metadata", protected(ls.trackMetadata, http.MethodGet, http.MethodHead, http.MethodPatch))
+	mux.Handle("/api/tracks/{id}/metadata/revert", protected(ls.revertMetadata, http.MethodPost))
+	mux.Handle("/api/favorites/tracks", protected(ls.favorites, http.MethodGet, http.MethodHead))
+	mux.Handle("/api/favorites/tracks/{id}", protected(ls.favorite, http.MethodPut, http.MethodDelete))
+	mux.Handle("/api/history", protected(ls.history, http.MethodGet, http.MethodHead, http.MethodPost, http.MethodDelete))
+	mux.Handle("/api/history/recent", protected(ls.recent, http.MethodGet, http.MethodHead))
+	mux.Handle("/api/history/top", protected(ls.top, http.MethodGet, http.MethodHead))
+	mux.Handle("/api/playback", protected(ls.playbackState, http.MethodGet, http.MethodHead, http.MethodPut))
 
 	// Themes: listing, applying, enabling and customizing. Installing themes
 	// is an administrator task outside the API (docs/themes.md).

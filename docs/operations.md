@@ -78,7 +78,10 @@ exits.
 ## Backup
 
 The database is the only thing to back up. It does not contain music, and
-it is small. **Treat backups like passwords:** they contain the password
+it is small. It also holds your listening history, favorites, the saved
+queue and metadata edits (edits are never written into music files, so the
+database is their only copy). The `artwork` folder next to it is a cache
+that Rewind rebuilds from your music; it need not be backed up. **Treat backups like passwords:** they contain the password
 hash and session hashes.
 
 **While Rewind runs** (online backup, consistent). This needs the `sqlite3`

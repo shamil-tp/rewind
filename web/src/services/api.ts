@@ -129,6 +129,26 @@ export interface Track {
   status: 'present' | 'missing'
   available: boolean
   metadata_status: string
+  relative_path?: string
+  release_date?: string
+  composer?: string
+  has_lyrics?: boolean
+  /** Only on single-track reads (GET /api/tracks/{id}). */
+  lyrics?: string
+  /** Changes with every metadata change; used to refresh cached artwork. */
+  revision?: number
+  album_id?: string
+  /** Each credited artist, with the ID of its page. */
+  artists?: ArtistRef[]
+  /** The signed-in user's data. */
+  favorite?: boolean
+  play_count?: number
+  last_played_at?: string
+}
+
+export interface ArtistRef {
+  id: string
+  name: string
 }
 
 export interface Pagination {
@@ -271,6 +291,9 @@ export interface Playlist {
   duration_ms: number
   created_at: string
   updated_at: string
+  /** The track whose artwork represents the playlist (chosen or first). */
+  artwork_track_id?: number
+  artwork_chosen?: boolean
 }
 
 export interface PlaylistEntry {
@@ -346,6 +369,10 @@ export interface Preferences {
   accent_color: string
   primary_color: string
   secondary_color: string
+  /** Percent of a track (at most four minutes) that counts as a play. */
+  play_threshold_percent: number
+  /** False: plays are not recorded (privacy mode). */
+  record_history: boolean
 }
 
 export const DEFAULT_PREFERENCES: Preferences = {
@@ -355,6 +382,8 @@ export const DEFAULT_PREFERENCES: Preferences = {
   accent_color: '',
   primary_color: '',
   secondary_color: '',
+  play_threshold_percent: 50,
+  record_history: true,
 }
 
 export async function getPreferences(signal?: AbortSignal): Promise<Preferences> {
@@ -458,4 +487,322 @@ export interface PluginStatusList {
 
 export function getPlugins(signal?: AbortSignal): Promise<PluginStatusList> {
   return request<PluginStatusList>('GET', '/api/plugins', undefined, signal)
+}
+
+// --- Albums and artists ---
+
+export interface Album {
+  id: string
+  title: string
+  artist: string
+  artists: ArtistRef[]
+  year?: number
+  genre?: string
+  track_count: number
+  disc_count: number
+  duration_ms: number
+  unavailable_count: number
+  artwork_track_id: number
+  added_at: string
+}
+
+export interface AlbumDetail extends Album {
+  /** Identifies the album's current metadata, for edits. */
+  version: string
+  /** Folders holding the files, as "<library>/<path>". */
+  folders: string[]
+  tracks: Track[]
+}
+
+export interface Artist {
+  id: string
+  name: string
+  track_count: number
+  album_count: number
+  duration_ms: number
+  artwork_track_id: number
+}
+
+export interface ArtistDetail extends Artist {
+  version: string
+  albums: Album[]
+  appears_on: Album[]
+  tracks: Track[]
+  tracks_truncated: boolean
+}
+
+export interface ArtistPage {
+  artist: ArtistDetail
+  top_tracks: Track[]
+  recent_tracks: Track[]
+  listening_ms: number
+}
+
+export interface Page<T> {
+  items: T[]
+  pagination: Pagination
+}
+
+export interface BrowseQuery {
+  page?: number
+  limit?: number
+  q?: string
+  sort?: string
+  order?: 'asc' | 'desc'
+}
+
+function queryString(q: object): string {
+  const params = new URLSearchParams()
+  for (const [k, v] of Object.entries(q)) if (v !== undefined && v !== '') params.set(k, String(v))
+  const qs = params.toString()
+  return qs ? `?${qs}` : ''
+}
+
+/** Album and artist IDs are opaque URL-safe strings from the server. */
+function groupID(id: string): string {
+  if (!/^[A-Za-z0-9_~-]{1,4096}$/.test(id)) throw new Error('invalid id')
+  return id
+}
+
+function trackPath(id: number): string {
+  if (!Number.isSafeInteger(id) || id < 1) throw new Error('invalid track id')
+  return `/api/tracks/${id}`
+}
+
+export function listAlbums(q: BrowseQuery = {}, signal?: AbortSignal): Promise<Page<Album>> {
+  return request<Page<Album>>('GET', `/api/albums${queryString(q)}`, undefined, signal)
+}
+
+export async function getAlbum(id: string, signal?: AbortSignal): Promise<AlbumDetail> {
+  return (await request<{ album: AlbumDetail }>('GET', `/api/albums/${groupID(id)}`, undefined, signal)).album
+}
+
+/** Edits album, album_artist, year and genre of every track; returns the album's (possibly new) ID. */
+export async function editAlbum(id: string, version: string, changes: Record<string, MetadataValue>): Promise<string> {
+  return (await request<{ id: string }>('PATCH', `/api/albums/${groupID(id)}/metadata`, { version, changes })).id
+}
+
+export function listArtists(q: BrowseQuery = {}, signal?: AbortSignal): Promise<Page<Artist>> {
+  return request<Page<Artist>>('GET', `/api/artists${queryString(q)}`, undefined, signal)
+}
+
+export function getArtist(id: string, signal?: AbortSignal): Promise<ArtistPage> {
+  return request<ArtistPage>('GET', `/api/artists/${groupID(id)}`, undefined, signal)
+}
+
+/** Renames an artist in every track that credits it; returns the new ID. */
+export async function renameArtist(id: string, version: string, name: string): Promise<string> {
+  return (await request<{ id: string }>('PATCH', `/api/artists/${groupID(id)}/name`, { version, name })).id
+}
+
+/** Artwork of a track; v changes when the track does, so caches refresh. */
+export function artworkUrl(trackId: number, size: 'small' | 'large', revision?: number): string {
+  return `${trackPath(trackId)}/artwork?size=${size}${revision !== undefined ? `&v=${revision}` : ''}`
+}
+
+// --- Metadata editing (stored in Rewind's database; files are never changed) ---
+
+export interface EditField {
+  Name: string
+  Kind: 'text' | 'multiline' | 'number'
+  Min: number
+  Max: number
+  Required: boolean
+}
+
+export type MetadataValue = string | number | null
+
+export interface TrackMetadata {
+  track_id: number
+  revision: number
+  values: Record<string, MetadataValue>
+  /** Fields edited in Rewind, and the values the file has for them. */
+  edited: string[]
+  from_file: Record<string, MetadataValue>
+  updated_at: string
+}
+
+export interface MetadataResponse {
+  metadata: TrackMetadata
+  fields: EditField[]
+  track: Track
+}
+
+export function getTrackMetadata(id: number, signal?: AbortSignal): Promise<MetadataResponse> {
+  return request<MetadataResponse>('GET', `${trackPath(id)}/metadata`, undefined, signal)
+}
+
+export function saveTrackMetadata(id: number, revision: number, changes: Record<string, MetadataValue>): Promise<MetadataResponse> {
+  return request<MetadataResponse>('PATCH', `${trackPath(id)}/metadata`, { revision, changes })
+}
+
+/** Restores the file's values for fields (all edited fields when omitted). */
+export function revertTrackMetadata(id: number, revision: number, fields?: string[]): Promise<MetadataResponse> {
+  return request<MetadataResponse>('POST', `${trackPath(id)}/metadata/revert`, fields ? { revision, fields } : { revision })
+}
+
+export async function getTrack(id: number, signal?: AbortSignal): Promise<Track> {
+  return (await request<{ track: Track }>('GET', trackPath(id), undefined, signal)).track
+}
+
+// --- Favorites ---
+
+export async function setFavorite(trackId: number, favorite: boolean): Promise<void> {
+  if (!Number.isSafeInteger(trackId) || trackId < 1) throw new Error('invalid track id')
+  await request(favorite ? 'PUT' : 'DELETE', `/api/favorites/tracks/${trackId}`)
+}
+
+export function listFavorites(q: { page?: number; limit?: number } = {}, signal?: AbortSignal): Promise<Page<Track>> {
+  return request<Page<Track>>('GET', `/api/favorites/tracks${queryString(q)}`, undefined, signal)
+}
+
+// --- Listening history ---
+
+export type SourceKind = 'library' | 'album' | 'artist' | 'playlist' | 'history' | 'queue' | 'favorites'
+
+export interface PlayEvent {
+  track_id: number
+  play_key: string
+  listened_ms: number
+  source_kind?: SourceKind
+  source_id?: string
+}
+
+export async function recordPlay(e: PlayEvent): Promise<boolean> {
+  return (await request<{ recorded: boolean }>('POST', '/api/history', e)).recorded
+}
+
+export interface HistoryEntry {
+  id: number
+  played_at: string
+  listened_ms: number
+  source_kind?: SourceKind
+  source_id?: string
+  track: Track
+}
+
+export interface HistoryQuery {
+  page?: number
+  limit?: number
+  q?: string
+  /** RFC 3339 times; to is exclusive. */
+  from?: string
+  to?: string
+  /** desc (newest first, default) or asc. */
+  order?: 'asc' | 'desc'
+}
+
+export function listHistory(q: HistoryQuery = {}, signal?: AbortSignal): Promise<Page<HistoryEntry>> {
+  return request<Page<HistoryEntry>>('GET', `/api/history${queryString(q)}`, undefined, signal)
+}
+
+export async function deleteHistory(ids: number[]): Promise<number> {
+  return (await request<{ deleted: number }>('DELETE', '/api/history', { ids })).deleted
+}
+
+export async function clearHistory(): Promise<number> {
+  return (await request<{ deleted: number }>('DELETE', '/api/history', { all: true })).deleted
+}
+
+export interface RecentAlbum {
+  id: string
+  title: string
+  artist: string
+  artists: ArtistRef[]
+  artwork_track_id: number
+  last_played_at: string
+}
+
+export interface RecentArtist extends ArtistRef {
+  artwork_track_id: number
+  last_played_at: string
+}
+
+export interface Recent {
+  tracks: Track[]
+  albums: RecentAlbum[]
+  artists: RecentArtist[]
+}
+
+export function getRecent(limit = 12, signal?: AbortSignal): Promise<Recent> {
+  return request<Recent>('GET', `/api/history/recent?limit=${limit}`, undefined, signal)
+}
+
+export async function getTopTracks(limit = 25, signal?: AbortSignal): Promise<Track[]> {
+  return (await request<{ items: Track[] }>('GET', `/api/history/top?limit=${limit}`, undefined, signal)).items
+}
+
+// --- Saved play queue ---
+
+export type RepeatMode = 'off' | 'all' | 'one'
+
+export interface PlaybackContext {
+  kind: SourceKind
+  id?: string
+  name?: string
+}
+
+export interface PlaybackState {
+  queue: number[]
+  original?: number[]
+  index: number
+  position_ms: number
+  shuffle: boolean
+  repeat: RepeatMode
+  speed: number
+  context?: PlaybackContext
+}
+
+export interface SavedPlayback {
+  state: PlaybackState
+  revision: number
+  tracks: Track[]
+}
+
+export function getPlayback(signal?: AbortSignal): Promise<SavedPlayback> {
+  return request<SavedPlayback>('GET', '/api/playback', undefined, signal)
+}
+
+/**
+ * Saves the queue. keepalive lets the request finish while the page is
+ * being closed (used on pagehide).
+ */
+export async function savePlayback(revision: number, state: PlaybackState, keepalive = false): Promise<void> {
+  if (!keepalive) {
+    await request('PUT', '/api/playback', { revision, state })
+    return
+  }
+  try {
+    await fetch('/api/playback', {
+      method: 'PUT',
+      credentials: 'same-origin',
+      keepalive: true,
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+      body: JSON.stringify({ revision, state }),
+    })
+  } catch {
+    // Best effort while the page closes.
+  }
+}
+
+// --- Playlist extras ---
+
+export interface AddTracksResult {
+  added: number
+  skipped: number
+  playlist: PlaylistDetail
+}
+
+/** Adds several tracks at once; tracks already in the playlist are skipped. */
+export function addTracksToPlaylist(id: number, trackIds: number[]): Promise<AddTracksResult> {
+  return request<AddTracksResult>('POST', `${playlistPath(id)}/tracks`, { track_ids: trackIds })
+}
+
+export async function duplicatePlaylist(id: number): Promise<Playlist> {
+  return (await request<{ playlist: Playlist }>('POST', `${playlistPath(id)}/duplicate`)).playlist
+}
+
+/** Chooses the track whose artwork represents the playlist; null uses the first track's. */
+export async function setPlaylistArtwork(id: number, trackId: number | null): Promise<Playlist> {
+  return (await request<{ playlist: Playlist }>('PUT', `${playlistPath(id)}/artwork`, { track_id: trackId })).playlist
 }

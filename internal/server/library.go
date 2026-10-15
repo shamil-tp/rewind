@@ -32,6 +32,7 @@ const (
 type libraryAPI struct {
 	catalog     *library.Catalog
 	scanner     *library.Scanner
+	personal    *library.Personal
 	maxPageSize int
 	logger      *slog.Logger
 }
@@ -186,6 +187,9 @@ func (l *libraryAPI) tracks(w http.ResponseWriter, r *http.Request) {
 		l.internalError(w, "listing tracks", err)
 		return
 	}
+	if !l.annotate(w, r, res.Tracks) {
+		return
+	}
 	writeJSON(w, http.StatusOK, trackListResponse{
 		Items: res.Tracks,
 		Pagination: pagination{
@@ -215,7 +219,24 @@ func (l *libraryAPI) track(w http.ResponseWriter, r *http.Request) {
 		l.internalError(w, "reading track", err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"track": t})
+	list := []library.Track{t}
+	if !l.annotate(w, r, list) {
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"track": list[0]})
+}
+
+// annotate adds the signed-in user's favorites and play counts.
+func (l *libraryAPI) annotate(w http.ResponseWriter, r *http.Request, tracks []library.Track) bool {
+	u, ok := auth.UserFrom(r.Context())
+	if !ok || l.personal == nil {
+		return true
+	}
+	if err := l.personal.Annotate(r.Context(), u.ID, tracks); err != nil {
+		l.internalError(w, "reading listening data", err)
+		return false
+	}
+	return true
 }
 
 // --- POST /api/library/scan ---

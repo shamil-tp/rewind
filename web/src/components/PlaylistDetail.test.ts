@@ -1,8 +1,21 @@
 import { fireEvent, render, screen, within } from '@testing-library/svelte'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { PlaylistDetail as Detail, Track } from '../services/api'
+import { listening } from '../services/listening.svelte'
+import { player } from '../services/player.svelte'
 import { apiError, json, mockFetch } from '../test/fetch'
 import PlaylistDetail from './PlaylistDetail.svelte'
+
+beforeEach(() => {
+  vi.spyOn(HTMLMediaElement.prototype, 'play').mockImplementation(function (this: HTMLMediaElement) {
+    this.dispatchEvent(new Event('playing'))
+    return Promise.resolve()
+  })
+  vi.spyOn(HTMLMediaElement.prototype, 'pause').mockImplementation(() => {})
+  vi.spyOn(HTMLMediaElement.prototype, 'load').mockImplementation(() => {})
+  player.attach(() => {})
+})
+afterEach(() => player.detach())
 
 function track(id: number, extra: Partial<Track> = {}): Track {
   return {
@@ -22,7 +35,7 @@ function detail(tracks: Track[], extra: Partial<Detail> = {}): Detail {
 }
 
 function props(over: Record<string, unknown> = {}) {
-  return { id: 5, active: true, currentId: null, playing: false, onPlay: vi.fn(), onUnauthorized: vi.fn(), ...over }
+  return { id: 5, active: true, onUnauthorized: vi.fn(), ...over }
 }
 
 async function entryButtons() {
@@ -47,18 +60,88 @@ describe('PlaylistDetail', () => {
     const rows = await entryButtons()
     expect(rows.map((r) => r.getAttribute('aria-label'))).toEqual(['Play Song 1 by Band (unavailable)', 'Play Song 2 by Band'])
     expect((rows[0] as HTMLButtonElement).disabled).toBe(true)
-    expect(screen.getByText('Unavailable')).toBeTruthy()
+    // A missing file is told apart from an unplugged drive.
+    expect(screen.getByText('File missing')).toBeTruthy()
   })
 
   it('plays from the first available track, or from a chosen one', async () => {
     const d = detail([track(1, { available: false }), track(2), track(3)])
     mockFetch({ 'GET /api/playlists/5': () => json(200, { playlist: d }) })
-    const p = props()
-    render(PlaylistDetail, { props: p })
+    render(PlaylistDetail, { props: props() })
     await fireEvent.click(await screen.findByRole('button', { name: 'Play' }))
-    expect(p.onPlay).toHaveBeenLastCalledWith(expect.objectContaining({ id: 5 }), 1)
+    expect(player.current?.id).toBe(2)
+    expect(player.context).toEqual({ kind: 'playlist', id: '5', name: 'Mix' })
+    expect(player.entries.map((e) => e.track.id)).toEqual([1, 2, 3])
     await fireEvent.click(screen.getByRole('button', { name: 'Play Song 3 by Band' }))
-    expect(p.onPlay).toHaveBeenLastCalledWith(expect.objectContaining({ id: 5 }), 2)
+    expect(player.current?.id).toBe(3)
+  })
+
+  it('shuffles, plays next and adds the playlist to the queue', async () => {
+    mockFetch({ 'GET /api/playlists/5': () => json(200, { playlist: detail([track(1), track(2), track(3, { available: false })]) }) })
+    render(PlaylistDetail, { props: props() })
+    await fireEvent.click(await screen.findByRole('button', { name: 'Shuffle' }))
+    expect(player.shuffle).toBe(true)
+    expect(player.entries).toHaveLength(3)
+    player.clear()
+    await fireEvent.click(screen.getByRole('button', { name: 'Add to queue' }))
+    // Only playable tracks are queued.
+    expect(player.entries.map((e) => e.track.id)).toEqual([1, 2])
+  })
+
+  it('duplicates the playlist and opens the copy', async () => {
+    mockFetch({
+      'GET /api/playlists/5': () => json(200, { playlist: detail([track(1)]) }),
+      'POST /api/playlists/5/duplicate': () => json(201, { playlist: { ...detail([track(1)]), id: 8, name: 'Mix (copy)', entries: undefined } }),
+    })
+    render(PlaylistDetail, { props: props() })
+    await fireEvent.click(await screen.findByRole('button', { name: 'Duplicate' }))
+    await vi.waitFor(() => expect(location.hash).toBe('#/playlists/8'))
+  })
+
+  it('chooses the artwork from one of its tracks', async () => {
+    const fetch = mockFetch({
+      'GET /api/playlists/5': () => json(200, { playlist: detail([track(1), track(2)], { artwork_track_id: 1 }) }),
+      'PUT /api/playlists/5/artwork': () => json(200, { playlist: { ...detail([track(1), track(2)]), artwork_track_id: 2, artwork_chosen: true, entries: undefined } }),
+    })
+    render(PlaylistDetail, { props: props() })
+    await fireEvent.click(await screen.findByRole('button', { name: 'Change the playlist artwork' }))
+    await fireEvent.click(screen.getByRole('button', { name: 'Use the artwork of Song 2' }))
+    expect(await screen.findByText('Artwork changed.')).toBeTruthy()
+    const put = fetch.mock.calls.find(([u]) => String(u).endsWith('/artwork'))!
+    expect(JSON.parse(String(put[1]?.body))).toEqual({ track_id: 2 })
+  })
+
+  it('reorders by drag and drop', async () => {
+    const fetch = mockFetch({
+      'GET /api/playlists/5': () => json(200, { playlist: detail([track(1), track(2), track(3)]) }),
+      'PUT /api/playlists/5/tracks': () => json(200, { playlist: detail([track(2), track(3), track(1)]) }),
+    })
+    const { container } = render(PlaylistDetail, { props: props() })
+    await entryButtons()
+    const items = container.querySelectorAll('li.entry')
+    await fireEvent.dragStart(items[0])
+    await fireEvent.dragOver(items[2])
+    await fireEvent.drop(items[2])
+    expect(await screen.findByText('Moved “Song 1” to position 3.')).toBeTruthy()
+    const put = fetch.mock.calls.find(([, i]) => i?.method === 'PUT')!
+    expect(JSON.parse(String(put[1]?.body))).toEqual({ track_ids: [2, 3, 1] })
+  })
+
+  it('adds its tracks to another playlist, never offering itself', async () => {
+    const fetch = mockFetch({
+      'GET /api/playlists/5': () => json(200, { playlist: detail([track(1), track(2)]) }),
+      'GET /api/playlists': () =>
+        json(200, { items: [{ ...detail([]), entries: undefined }, { ...detail([]), id: 7, name: 'Other', entries: undefined }] }),
+      'POST /api/playlists/7/tracks': () => json(200, { added: 1, skipped: 1, playlist: detail([track(1), track(2)]) }),
+    })
+    render(PlaylistDetail, { props: props() })
+    await fireEvent.click(await screen.findByRole('button', { name: 'Add to another playlist…' }))
+    const select = (await screen.findByLabelText('Add to playlist')) as HTMLSelectElement
+    expect([...select.options].map((o) => o.textContent)).toEqual(['Other (0)'])
+    await fireEvent.click(screen.getByRole('button', { name: 'Add' }))
+    await vi.waitFor(() => expect(listening.announcement).toBe('Added 1 track to “Other” (1 already there).'))
+    const post = fetch.mock.calls.find(([, i]) => i?.method === 'POST')!
+    expect(JSON.parse(String(post[1]?.body))).toEqual({ track_ids: [1, 2] })
   })
 
   it('disables Play when nothing can be played', async () => {
@@ -113,7 +196,8 @@ describe('PlaylistDetail', () => {
       },
     })
     render(PlaylistDetail, { props: props() })
-    await fireEvent.click(await screen.findByRole('button', { name: 'Remove Song 1 from the playlist' }))
+    await fireEvent.click(await screen.findByRole('button', { name: 'More actions for Song 1' }))
+    await fireEvent.click(screen.getByRole('menuitem', { name: 'Remove from playlist' }))
     expect(await screen.findByText('Removed “Song 1”. It is still in your library.')).toBeTruthy()
     expect(screen.queryByText('Song 1')).toBeNull()
     expect(fetch.mock.calls.map(([u, i]) => `${i?.method ?? 'GET'} ${u}`)).toEqual([
@@ -129,7 +213,7 @@ describe('PlaylistDetail', () => {
       'PATCH /api/playlists/5': () => json(200, { playlist: { ...detail([track(1)]), entries: undefined, name: 'Evening' } }),
     })
     render(PlaylistDetail, { props: props() })
-    await fireEvent.click(await screen.findByRole('button', { name: 'Rename' }))
+    await fireEvent.click(await screen.findByRole('button', { name: 'Edit' }))
     await fireEvent.input(screen.getByLabelText('Name'), { target: { value: ' Evening ' } })
     await fireEvent.input(screen.getByLabelText(/Description/), { target: { value: '' } })
     await fireEvent.click(screen.getByRole('button', { name: 'Save' }))
@@ -146,7 +230,7 @@ describe('PlaylistDetail', () => {
       'PATCH /api/playlists/5': () => apiError(409, 'name_taken', 'a playlist with this name already exists'),
     })
     render(PlaylistDetail, { props: props() })
-    await fireEvent.click(await screen.findByRole('button', { name: 'Rename' }))
+    await fireEvent.click(await screen.findByRole('button', { name: 'Edit' }))
     await fireEvent.input(screen.getByLabelText('Name'), { target: { value: 'Taken' } })
     await fireEvent.click(screen.getByRole('button', { name: 'Save' }))
     expect((await screen.findByRole('alert')).textContent).toBe('A playlist with this name already exists.')

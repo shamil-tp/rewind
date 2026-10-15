@@ -1,6 +1,8 @@
 import { fireEvent, render, screen, within } from '@testing-library/svelte'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Track } from '../services/api'
+import { player } from '../services/player.svelte'
+import { ui } from '../services/ui.svelte'
 import { json, mockFetch } from '../test/fetch'
 import { themeState } from '../test/themes'
 import Shell from './Shell.svelte'
@@ -24,7 +26,11 @@ const routes = {
   'GET /api/preferences': () => json(200, { preferences: { library_sort: 'artist', autoplay_next: true } }),
   'GET /api/plugins': () => json(200, { configured: false, api_version: 1, items: [] }),
   'GET /api/themes': () => json(200, themeState()),
+  'GET /api/playback': () => json(200, { revision: 0, tracks: [], state: { queue: [], index: -1, position_ms: 0, shuffle: false, repeat: 'off', speed: 1 } }),
+  'PUT /api/playback': () => json(200, {}),
 }
+
+const audioEl = () => document.querySelector<HTMLAudioElement>('audio[data-rewind-player]')!
 
 function stubMedia() {
   vi.spyOn(HTMLMediaElement.prototype, 'play').mockImplementation(function (this: HTMLMediaElement) {
@@ -61,7 +67,10 @@ describe('Shell', () => {
     render(Shell, { props: props() })
     const nav = screen.getByRole('navigation', { name: 'Main' })
     const links = within(nav).getAllByRole('link')
-    expect(links.map((l) => l.textContent)).toEqual(['Library', 'Playlists', 'Settings', 'Status'])
+    expect(links.map((l) => l.textContent)).toEqual(['Library', 'Albums', 'Artists', 'Playlists', 'Favorites', 'History', 'Settings', 'Status'])
+    // Phones get the four main destinations plus More.
+    const compact = screen.getByRole('navigation', { name: 'Main (compact)' })
+    expect(within(compact).getAllByRole('link').map((l) => l.textContent)).toEqual(['Library', 'Albums', 'Artists', 'Playlists'])
     expect(within(nav).getByRole('link', { name: 'Library' }).getAttribute('aria-current')).toBe('page')
     expect(screen.getByText('owner')).toBeTruthy()
   })
@@ -71,7 +80,7 @@ describe('Shell', () => {
     const { container } = render(Shell, { props: props() })
     expect((container.querySelector('section.playbar') as HTMLElement).hidden).toBe(true)
     await fireEvent.click(await screen.findByRole('button', { name: 'Play Song 2 by Band' }))
-    const audio = container.querySelector('audio')!
+    const audio = audioEl()
     expect(audio.getAttribute('src')).toBe('/api/tracks/2/stream')
     const bar = screen.getByRole('region', { name: 'Player' })
     expect(within(bar).getByText('Song 2')).toBeTruthy()
@@ -80,14 +89,14 @@ describe('Shell', () => {
 
     await go('#/status')
     expect(await screen.findByRole('heading', { name: 'Status' })).toBeTruthy()
-    expect(screen.getByRole('link', { name: 'Status' }).getAttribute('aria-current')).toBe('page')
-    expect(container.querySelectorAll('audio')).toHaveLength(1)
-    expect(container.querySelector('audio')).toBe(audio)
+    expect(within(screen.getByRole('navigation', { name: 'Main' })).getByRole('link', { name: 'Status' }).getAttribute('aria-current')).toBe('page')
+    expect(document.querySelectorAll('audio')).toHaveLength(1)
+    expect(audioEl()).toBe(audio)
     expect(audio.getAttribute('src')).toBe('/api/tracks/2/stream')
     expect(within(screen.getByRole('region', { name: 'Player' })).getByText('Song 2')).toBeTruthy()
 
     await go('#/library')
-    expect(container.querySelector('audio')).toBe(audio)
+    expect(audioEl()).toBe(audio)
     // The library view kept its state instead of reloading.
     expect(screen.getByRole('button', { name: 'Play Song 2 by Band' }).getAttribute('aria-current')).toBe('true')
   })
@@ -96,7 +105,7 @@ describe('Shell', () => {
     mockFetch(routes)
     const { container } = render(Shell, { props: props() })
     await fireEvent.click(await screen.findByRole('button', { name: 'Play Song 2 by Band' }))
-    const audio = container.querySelector('audio')!
+    const audio = audioEl()
     const main = container.querySelector('main') as HTMLElement & { inert: boolean }
     const rail = container.querySelector('header.rail') as HTMLElement & { inert: boolean }
     expect(main.inert).toBe(false)
@@ -108,7 +117,7 @@ describe('Shell', () => {
 
     await fireEvent.click(screen.getByRole('button', { name: 'Close Now Playing' }))
     expect(main.inert).toBe(false)
-    expect(container.querySelector('audio')).toBe(audio)
+    expect(audioEl()).toBe(audio)
     expect(audio.getAttribute('src')).toBe('/api/tracks/2/stream')
     expect(within(screen.getByRole('region', { name: 'Player' })).getByRole('button', { name: 'Pause' })).toBeTruthy()
   })
@@ -157,38 +166,38 @@ describe('Shell', () => {
   it('plays a playlist in order through the one player, skipping unavailable tracks', async () => {
     location.hash = '#/playlists/7'
     mockFetch(playlistRoutes(true))
-    const { container } = render(Shell, { props: props() })
+    render(Shell, { props: props() })
     await fireEvent.click(await screen.findByRole('button', { name: 'Play' }))
-    const audio = container.querySelector('audio')!
+    const audio = audioEl()
     expect(audio.getAttribute('src')).toBe('/api/tracks/1/stream')
     const bar = screen.getByRole('region', { name: 'Player' })
-    expect(within(bar).getByText('Trip · 1 of 3')).toBeTruthy()
+    expect(player.context).toEqual({ kind: 'playlist', id: '7', name: 'Trip' })
 
     // The track ends: the next playable one (3, not the missing 2) starts.
     audio.dispatchEvent(new Event('ended'))
     await vi.waitFor(() => expect(audio.getAttribute('src')).toBe('/api/tracks/3/stream'))
-    expect(within(bar).getByText('Trip · 3 of 3')).toBeTruthy()
-    expect((within(bar).getByRole('button', { name: 'Next track' }) as HTMLButtonElement).disabled).toBe(true)
+    expect(player.index).toBe(2)
+    await vi.waitFor(() => expect((within(bar).getByRole('button', { name: 'Next track' }) as HTMLButtonElement).disabled).toBe(true))
 
     await fireEvent.click(within(bar).getByRole('button', { name: 'Previous track' }))
     await vi.waitFor(() => expect(audio.getAttribute('src')).toBe('/api/tracks/1/stream'))
-    expect(container.querySelectorAll('audio')).toHaveLength(1)
+    expect(document.querySelectorAll('audio')).toHaveLength(1)
 
-    // Choosing a library track leaves the playlist.
+    // Choosing a library track plays the library list instead.
     await go('#/library')
     await fireEvent.click(await screen.findByRole('button', { name: 'Play Song 2 by Band' }))
     expect(audio.getAttribute('src')).toBe('/api/tracks/2/stream')
-    expect(within(bar).queryByRole('button', { name: 'Next track' })).toBeNull()
+    expect(player.context?.kind).toBe('library')
   })
 
   it('stops at the end of a track when continuing playlists is off', async () => {
     location.hash = '#/playlists/7'
     mockFetch(playlistRoutes(false))
-    const { container } = render(Shell, { props: props() })
+    render(Shell, { props: props() })
     // Wait until the saved preference (off) has loaded.
     await vi.waitFor(() => expect(screen.getByRole('button', { name: 'Play Song 1 by Band' })).toBeTruthy())
     await fireEvent.click(await screen.findByRole('button', { name: 'Play' }))
-    const audio = container.querySelector('audio')!
+    const audio = audioEl()
     audio.dispatchEvent(new Event('ended'))
     await new Promise((r) => setTimeout(r, 0))
     expect(audio.getAttribute('src')).toBe('/api/tracks/1/stream')
@@ -221,6 +230,153 @@ describe('Shell', () => {
     await go('#/library')
     expect(await screen.findByRole('button', { name: 'Play Song 9 by Band' })).toBeTruthy()
     expect(fetch.mock.calls.filter(([u]) => String(u).startsWith('/api/tracks'))).toHaveLength(2)
+  })
+
+  describe('listening experience', () => {
+    const album = {
+      id: 'YmFuZB9yZWNvcmQ', title: 'Record', artist: 'Band', artists: [{ id: 'YmFuZA', name: 'Band' }], year: 2001,
+      track_count: 2, disc_count: 1, duration_ms: 120_000, unavailable_count: 0, artwork_track_id: 1, added_at: '',
+    }
+    const albumRoutes = {
+      ...routes,
+      'GET /api/albums?page=1&limit=60&sort=title&order=asc': () =>
+        json(200, { items: [album], pagination: { page: 1, limit: 60, total: 1, total_pages: 1 } }),
+      'GET /api/albums/YmFuZB9yZWNvcmQ': () =>
+        json(200, { album: { ...album, version: 'v1', folders: ['MUSIC/Band/Record'], tracks: [track(1), track(2)] } }),
+    }
+
+    it('plays an album from its page, and keeps playing while browsing', async () => {
+      location.hash = '#/albums'
+      mockFetch(albumRoutes)
+      render(Shell, { props: props() })
+      await fireEvent.click(await screen.findByRole('link', { name: /Record/ }))
+      await go(`#/albums/${album.id}`)
+      expect(await screen.findByRole('heading', { name: 'Record', level: 1 })).toBeTruthy()
+      expect(screen.getByText('Folder: MUSIC/Band/Record')).toBeTruthy()
+      await fireEvent.click(screen.getByRole('button', { name: 'Play' }))
+      expect(audioEl().getAttribute('src')).toBe('/api/tracks/1/stream')
+      expect(player.context).toEqual({ kind: 'album', id: album.id, name: 'Record' })
+      const audio = audioEl()
+      await go('#/library')
+      await go('#/history')
+      expect(audioEl()).toBe(audio)
+      expect(audio.getAttribute('src')).toBe('/api/tracks/1/stream')
+      expect(player.playing).toBe(true)
+    })
+
+    it('restores the saved queue after a reload without starting audio', async () => {
+      const play = HTMLMediaElement.prototype.play as unknown as ReturnType<typeof vi.fn>
+      mockFetch({
+        ...routes,
+        'GET /api/playback': () =>
+          json(200, { revision: 3, tracks: [track(1), track(2)], state: { queue: [1, 2], index: 1, position_ms: 30_000, shuffle: false, repeat: 'all', speed: 1 } }),
+      })
+      render(Shell, { props: props() })
+      const bar = await screen.findByRole('region', { name: 'Player' })
+      await vi.waitFor(() => expect(within(bar).getByText('Song 2')).toBeTruthy())
+      expect(within(bar).getByText('Press play to resume.')).toBeTruthy()
+      expect(within(bar).getByLabelText('Elapsed time').textContent).toBe('0:30')
+      expect(play).not.toHaveBeenCalled()
+      expect(player.repeat).toBe('all')
+    })
+
+    it('handles keyboard shortcuts, but not while typing', async () => {
+      mockFetch(routes)
+      render(Shell, { props: props() })
+      await fireEvent.click(await screen.findByRole('button', { name: 'Play Song 1 by Band' }))
+      await fireEvent.keyDown(document.body, { key: ' ' })
+      expect(player.playing).toBe(false)
+      await fireEvent.keyDown(document.body, { key: ' ' })
+      expect(player.playing).toBe(true)
+      await fireEvent.keyDown(document.body, { key: 's' })
+      expect(player.shuffle).toBe(true)
+      await fireEvent.keyDown(document.body, { key: 'r' })
+      expect(player.repeat).toBe('all')
+      await fireEvent.keyDown(document.body, { key: 'm' })
+      expect(player.muted).toBe(true)
+      // Typing in the search box does not trigger shortcuts.
+      const search = screen.getByLabelText('Search')
+      await fireEvent.keyDown(search, { key: 'm' })
+      expect(player.muted).toBe(true)
+      await fireEvent.keyDown(document.body, { key: 'q' })
+      expect(screen.getByRole('dialog', { name: 'Queue' })).toBeTruthy()
+      await fireEvent.keyDown(document.body, { key: 'Escape' })
+      expect(screen.queryByRole('dialog', { name: 'Queue' })).toBeNull()
+      await fireEvent.keyDown(document.body, { key: '?' })
+      expect(screen.getByRole('dialog', { name: 'Keyboard shortcuts' })).toBeTruthy()
+      // While a dialog is open, only Escape works.
+      await fireEvent.keyDown(document.body, { key: 'm' })
+      expect(player.muted).toBe(true)
+      await fireEvent.keyDown(document.body, { key: 'Escape' })
+      expect(ui.shortcutsOpen).toBe(false)
+      await fireEvent.keyDown(document.body, { key: '/' })
+      await vi.waitFor(() => expect(document.activeElement).toBe(screen.getByLabelText('Search')))
+    })
+
+    it('adds to the queue, reorders upcoming tracks and keeps the current one', async () => {
+      mockFetch({
+        ...routes,
+        'GET /api/tracks?page=1&limit=50&sort=artist&order=asc': () =>
+          json(200, { items: [track(1), track(2), track(3)], pagination: { page: 1, limit: 50, total: 3, total_pages: 1 } }),
+      })
+      render(Shell, { props: props() })
+      await fireEvent.click(await screen.findByRole('button', { name: 'Play Song 1 by Band' }))
+      await fireEvent.click(screen.getByRole('button', { name: 'More actions for Song 1' }))
+      await fireEvent.click(screen.getByRole('menuitem', { name: 'Add to queue' }))
+      await fireEvent.click(within(screen.getByRole('region', { name: 'Player' })).getByRole('button', { name: 'Queue' }))
+      const queue = screen.getByRole('dialog', { name: 'Queue' })
+      const upNext = within(queue).getByRole('list', { name: 'Up next' })
+      expect(within(upNext).getAllByRole('button', { name: /now$/ }).map((b) => b.getAttribute('aria-label'))).toEqual([
+        'Play Song 2 by Band now', 'Play Song 3 by Band now', 'Play Song 1 by Band now',
+      ])
+      await fireEvent.click(within(queue).getByRole('button', { name: 'Move Song 1 by Band up' }))
+      expect(player.entries.map((e) => e.track.id)).toEqual([1, 2, 1, 3])
+      expect(player.index).toBe(0)
+      expect(audioEl().getAttribute('src')).toBe('/api/tracks/1/stream')
+    })
+
+    it('edits track details and refreshes the library', async () => {
+      let title = 'Song 1'
+      const fetch = mockFetch({
+        ...routes,
+        'GET /api/tracks?page=1&limit=50&sort=artist&order=asc': () =>
+          json(200, { items: [{ ...track(1), title }, track(2)], pagination: { page: 1, limit: 50, total: 2, total_pages: 1 } }),
+        'GET /api/tracks/1/metadata': () =>
+          json(200, {
+            metadata: { track_id: 1, revision: 4, values: { title: 'Song 1', artist: 'Band', year: null }, edited: [], from_file: {}, updated_at: '' },
+            fields: [
+              { Name: 'title', Kind: 'text', Min: 0, Max: 512, Required: true },
+              { Name: 'artist', Kind: 'text', Min: 0, Max: 512, Required: false },
+              { Name: 'year', Kind: 'number', Min: 1000, Max: 9999, Required: false },
+            ],
+            track: track(1),
+          }),
+        'PATCH /api/tracks/1/metadata': () => {
+          title = 'Première'
+          return json(200, {
+            metadata: { track_id: 1, revision: 5, values: { title, artist: 'Band', year: 1999 }, edited: ['title', 'year'], from_file: { title: 'Song 1', year: null }, updated_at: '' },
+            fields: [{ Name: 'title', Kind: 'text', Min: 0, Max: 512, Required: true }],
+            track: { ...track(1), title },
+          })
+        },
+      })
+      render(Shell, { props: props() })
+      await fireEvent.click(await screen.findByRole('button', { name: 'More actions for Song 1' }))
+      await fireEvent.click(screen.getByRole('menuitem', { name: 'Edit details…' }))
+      const dialog = await screen.findByRole('dialog', { name: 'Edit details' })
+      expect(within(dialog).getByText(/Your music files are not modified/)).toBeTruthy()
+      await fireEvent.input(await within(dialog).findByLabelText('Year'), { target: { value: '99' } })
+      expect(within(dialog).getByText(/whole number from 1000 to 9999/)).toBeTruthy()
+      expect((within(dialog).getByRole('button', { name: 'Save' }) as HTMLButtonElement).disabled).toBe(true)
+      await fireEvent.input(within(dialog).getByLabelText('Year'), { target: { value: '1999' } })
+      await fireEvent.input(within(dialog).getByLabelText('Title'), { target: { value: 'Première' } })
+      expect(within(dialog).getByText('Unsaved changes.')).toBeTruthy()
+      await fireEvent.click(within(dialog).getByRole('button', { name: 'Save' }))
+      const patch = fetch.mock.calls.find(([, i]) => i?.method === 'PATCH')!
+      expect(JSON.parse(String(patch[1]?.body))).toEqual({ revision: 4, changes: { title: 'Première', year: 1999 } })
+      // The library reloads and shows the new title.
+      expect(await screen.findByRole('button', { name: 'Play Première by Band' })).toBeTruthy()
+    })
   })
 
   describe('themes', () => {
@@ -284,9 +440,9 @@ describe('Shell', () => {
 
     it('switches themes from Settings without interrupting playback', async () => {
       mockFetch({ ...routes, 'PUT /api/themes/active': () => json(200, themeState('light')) })
-      const { container } = render(Shell, { props: props() })
+      render(Shell, { props: props() })
       await fireEvent.click(await screen.findByRole('button', { name: 'Play Song 2 by Band' }))
-      const audio = container.querySelector('audio')!
+      const audio = audioEl()
       const pause = HTMLMediaElement.prototype.pause as unknown as ReturnType<typeof vi.fn>
       const load = HTMLMediaElement.prototype.load as unknown as ReturnType<typeof vi.fn>
       const [pauses, loads] = [pause.mock.calls.length, load.mock.calls.length]
@@ -298,8 +454,8 @@ describe('Shell', () => {
       expect(hint().theme).toBe('light')
 
       // Same element, same source, never paused or reloaded.
-      expect(container.querySelectorAll('audio')).toHaveLength(1)
-      expect(container.querySelector('audio')).toBe(audio)
+      expect(document.querySelectorAll('audio')).toHaveLength(1)
+      expect(audioEl()).toBe(audio)
       expect(audio.getAttribute('src')).toBe('/api/tracks/2/stream')
       expect(pause.mock.calls.length).toBe(pauses)
       expect(load.mock.calls.length).toBe(loads)

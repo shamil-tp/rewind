@@ -50,6 +50,26 @@ type Track struct {
 	MissingSince   *time.Time `json:"missing_since,omitempty"`
 	AddedAt        time.Time  `json:"added_at"`
 	UpdatedAt      time.Time  `json:"updated_at"`
+
+	Composer *string `json:"composer,omitempty"`
+	// HasLyrics says whether lyrics are stored; Lyrics is filled in only by
+	// Track (single-track reads), to keep lists small.
+	HasLyrics bool    `json:"has_lyrics"`
+	Lyrics    *string `json:"lyrics,omitempty"`
+	// Revision changes with every metadata change (scan or edit).
+	Revision int64 `json:"revision"`
+	// AlbumID is the album's ID (see browse.go); nil without an album tag.
+	AlbumID *string `json:"album_id,omitempty"`
+	// Artists links to each artist credited by the artist field (or the
+	// album artist field when the artist is not tagged).
+	Artists []ArtistRef `json:"artists"`
+
+	// Per-user values, filled in by Annotate.
+	Favorite     bool       `json:"favorite"`
+	PlayCount    int64      `json:"play_count"`
+	LastPlayedAt *time.Time `json:"last_played_at,omitempty"`
+
+	rootName string // display name of the root, for folder names
 }
 
 // Sort keys accepted by TrackQuery.Sort, mapped to fixed ORDER BY terms. User
@@ -102,7 +122,8 @@ const trackFields = `t.id, t.root_id, t.title, t.artist, t.album, t.album_artist
 	t.year, t.track_number, t.disc_number, t.duration_ms, t.format, t.codec, t.file_size, t.rel_path,
 	t.status, ` + trackAvailable + `,
 	t.metadata_status, t.metadata_error, t.missing_since, t.first_seen_at, t.updated_at,
-	r.path, r.configured_path`
+	r.path, r.configured_path, t.composer, t.lyrics IS NOT NULL, t.revision,
+	CASE WHEN t.album IS NOT NULL THEN ` + albumKeyExpr + ` END`
 
 // trackAvailable is true when a track can be streamed: its file was found by
 // the last scan and its root is configured and mounted.
@@ -196,12 +217,16 @@ func (c *Catalog) Tracks(ctx context.Context, q TrackQuery) (TrackPage, error) {
 	return page, rows.Err()
 }
 
-// Track returns one track by ID, from any root (including disabled ones).
+// Track returns one track by ID, from any root (including disabled ones),
+// with its lyrics.
 func (c *Catalog) Track(ctx context.Context, id int64) (Track, error) {
-	t, err := scanTrack(c.db.QueryRowContext(ctx, trackSelect+" WHERE t.id = ?", id))
+	var lyrics sql.NullString
+	t, err := scanTrack(c.db.QueryRowContext(ctx,
+		"SELECT "+trackFields+", t.lyrics FROM tracks t JOIN library_roots r ON r.id = t.root_id WHERE t.id = ?", id), &lyrics)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Track{}, ErrTrackNotFound
 	}
+	t.Lyrics = strp(lyrics)
 	return t, err
 }
 
@@ -213,6 +238,7 @@ func scanTrack(row rowScanner, extra ...any) (Track, error) {
 	var (
 		t                                                         Track
 		artist, album, albumArtist, genre, date, codec, metaError sql.NullString
+		composer, albumKey                                        sql.NullString
 		year, trackNo, discNo, duration, missingSince             sql.NullInt64
 		added, updated                                            int64
 		rootPath, rootConfigured                                  string
@@ -220,10 +246,21 @@ func scanTrack(row rowScanner, extra ...any) (Track, error) {
 	err := row.Scan(append([]any{&t.ID, &t.RootID, &t.Title, &artist, &album, &albumArtist, &genre, &date,
 		&year, &trackNo, &discNo, &duration, &t.Format, &codec, &t.SizeBytes, &t.RelativePath,
 		&t.Status, &t.Available, &t.MetadataStatus, &metaError, &missingSince, &added, &updated,
-		&rootPath, &rootConfigured}, extra...)...)
+		&rootPath, &rootConfigured, &composer, &t.HasLyrics, &t.Revision, &albumKey}, extra...)...)
 	if err != nil {
 		return Track{}, err
 	}
+	t.Composer = strp(composer)
+	if albumKey.Valid {
+		id := EncodeID(albumKey.String)
+		t.AlbumID = &id
+	}
+	credits := artist.String
+	if credits == "" {
+		credits = albumArtist.String
+	}
+	t.Artists = artistRefs(credits)
+	t.rootName = DisplayName(rootConfigured)
 	t.Artist, t.Album, t.AlbumArtist = strp(artist), strp(album), strp(albumArtist)
 	t.Genre, t.ReleaseDate, t.Codec = strp(genre), strp(date), strp(codec)
 	t.Year, t.TrackNumber, t.DiscNumber, t.DurationMS = intp(year), intp(trackNo), intp(discNo), intp(duration)

@@ -24,6 +24,7 @@ const maxReorderBodyBytes = 256 << 10
 type playlistAPI struct {
 	playlists *library.Playlists
 	prefs     *prefs.Store
+	personal  *library.Personal
 	logger    *slog.Logger
 }
 
@@ -174,14 +175,91 @@ func (p *playlistAPI) item(w http.ResponseWriter, r *http.Request) {
 			p.playlistError(w, "reading playlist", err)
 			return
 		}
+		if !p.annotate(w, r, u.ID, &d) {
+			return
+		}
 		writeJSON(w, http.StatusOK, map[string]any{"playlist": d})
 	}
+}
+
+// annotate adds the user's favorites and play counts to a playlist's tracks.
+func (p *playlistAPI) annotate(w http.ResponseWriter, r *http.Request, userID int64, d *library.PlaylistDetail) bool {
+	if p.personal == nil {
+		return true
+	}
+	tracks := make([]library.Track, len(d.Entries))
+	for i := range d.Entries {
+		tracks[i] = d.Entries[i].Track
+	}
+	if err := p.personal.Annotate(r.Context(), userID, tracks); err != nil {
+		p.internalError(w, "reading listening data", err)
+		return false
+	}
+	for i := range d.Entries {
+		d.Entries[i].Track = tracks[i]
+	}
+	return true
+}
+
+// POST /api/playlists/{id}/duplicate
+func (p *playlistAPI) duplicate(w http.ResponseWriter, r *http.Request) {
+	if _, ok := queryParams(w, r); !ok {
+		return
+	}
+	id, ok := pathID(w, r, "id", "playlist")
+	if !ok {
+		return
+	}
+	u, ok := p.user(w, r)
+	if !ok {
+		return
+	}
+	pl, err := p.playlists.Duplicate(r.Context(), u.ID, id)
+	if err != nil {
+		p.playlistError(w, "duplicating playlist", err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, map[string]any{"playlist": pl})
+}
+
+type artworkRequest struct {
+	TrackID *int64 `json:"track_id"`
+}
+
+// PUT /api/playlists/{id}/artwork {"track_id": 12} (null: the first track's)
+func (p *playlistAPI) artwork(w http.ResponseWriter, r *http.Request) {
+	if _, ok := queryParams(w, r); !ok {
+		return
+	}
+	id, ok := pathID(w, r, "id", "playlist")
+	if !ok {
+		return
+	}
+	u, ok := p.user(w, r)
+	if !ok {
+		return
+	}
+	var req artworkRequest
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	if req.TrackID != nil && *req.TrackID < 1 {
+		validationFailed(w, "track_id must be a positive integer or null")
+		return
+	}
+	pl, err := p.playlists.SetArtwork(r.Context(), u.ID, id, req.TrackID)
+	if err != nil {
+		p.playlistError(w, "setting playlist artwork", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"playlist": pl})
 }
 
 // --- /api/playlists/{id}/tracks ---
 
 type addTrackRequest struct {
-	TrackID int64 `json:"track_id"`
+	TrackID  int64   `json:"track_id"`
+	TrackIDs []int64 `json:"track_ids"`
 }
 
 type reorderRequest struct {
@@ -202,7 +280,11 @@ func (p *playlistAPI) tracks(w http.ResponseWriter, r *http.Request) {
 	}
 	if r.Method == http.MethodPost {
 		var req addTrackRequest
-		if !decodeJSON(w, r, &req) {
+		if !decodeJSONLimit(w, r, &req, maxReorderBodyBytes) {
+			return
+		}
+		if req.TrackIDs != nil {
+			p.addTracks(w, r, u.ID, id, req)
 			return
 		}
 		if req.TrackID < 1 {
@@ -246,7 +328,39 @@ func (p *playlistAPI) tracks(w http.ResponseWriter, r *http.Request) {
 		p.playlistError(w, "reading playlist", err)
 		return
 	}
+	if !p.annotate(w, r, u.ID, &d) {
+		return
+	}
 	writeJSON(w, http.StatusOK, map[string]any{"playlist": d})
+}
+
+// addTracks handles {"track_ids": [...]}: several tracks at once, skipping
+// those already in the playlist. Returns the counts and the playlist.
+func (p *playlistAPI) addTracks(w http.ResponseWriter, r *http.Request, userID, id int64, req addTrackRequest) {
+	if req.TrackID != 0 || len(req.TrackIDs) == 0 || len(req.TrackIDs) > library.MaxAddTracks {
+		validationFailed(w, "send track_id or a track_ids list of 1 to %d tracks", library.MaxAddTracks)
+		return
+	}
+	for _, t := range req.TrackIDs {
+		if t < 1 {
+			validationFailed(w, "track_ids must contain positive integers")
+			return
+		}
+	}
+	added, skipped, err := p.playlists.AddTracks(r.Context(), userID, id, req.TrackIDs)
+	if err != nil {
+		p.playlistError(w, "adding playlist tracks", err)
+		return
+	}
+	d, err := p.playlists.Get(r.Context(), userID, id)
+	if err != nil {
+		p.playlistError(w, "reading playlist", err)
+		return
+	}
+	if !p.annotate(w, r, userID, &d) {
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"added": added, "skipped": skipped, "playlist": d})
 }
 
 // --- DELETE /api/playlists/{id}/tracks/{trackId} ---

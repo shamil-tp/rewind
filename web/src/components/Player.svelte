@@ -1,203 +1,85 @@
 <script lang="ts">
-  import { onDestroy, tick } from 'svelte'
-  import { streamStatus, streamUrl, type Track } from '../services/api'
+  // The mini player (a floating bar) and the Now Playing screen: two views
+  // of the shared player state (services/player.svelte.ts). Neither owns
+  // audio; opening and closing the screen never touches playback.
+  import { tick } from 'svelte'
+  import { getTrack, type Track } from '../services/api'
   import { formatTime } from '../services/format'
-  import type { Sequence } from '../services/sequence'
+  import { listening } from '../services/listening.svelte'
+  import { player, SEEK_STEP_S, SPEEDS } from '../services/player.svelte'
+  import { albumHref, artistHref, navigate, ui } from '../services/ui.svelte'
+  import { sentence } from '../services/validation'
+  import Artwork from './Artwork.svelte'
+  import Icon from './Icon.svelte'
+  import TrackMenu from './TrackMenu.svelte'
 
   interface Props {
-    /** The selected track, or null when nothing is selected. */
-    track: Track | null
-    /** Called when the stream reports that the session has expired. */
     onUnauthorized: () => void
-    /** Called when playback starts or stops (for "Playing" labels elsewhere). */
-    onPlayingChange?: (playing: boolean) => void
-    /** Called when the track plays to its end. */
-    onEnded?: () => void
-    /** Called when the Now Playing screen opens or closes (the page behind becomes inert). */
-    onExpandedChange?: (expanded: boolean) => void
-    /** Previous/next controls while playing a playlist; absent otherwise. */
-    sequence?: Sequence | null
   }
-  let { track, onUnauthorized, onPlayingChange, onEnded, onExpandedChange, sequence = null }: Props = $props()
+  let { onUnauthorized }: Props = $props()
 
-  // One <audio> element for the lifetime of the component; selecting another
-  // track only changes its source, so no elements or listeners accumulate.
-  // The mini bar and the Now Playing screen are two views of the same state
-  // below; switching between them never touches the element.
-  let audio: HTMLAudioElement | undefined = $state()
-  let loadedId: number | null = null
-
-  let playing = $state(false)
-  let loading = $state(false)
-  let error = $state('')
-  let notice = $state('')
-  let current = $state(0)
-  let duration = $state(0)
-
-  // --- Now Playing screen ---
-  let expanded = $state(false)
+  const track = $derived(player.current)
   let openButton: HTMLButtonElement | undefined = $state()
   let closeButton: HTMLButtonElement | undefined = $state()
   let screenEl: HTMLDivElement | undefined = $state()
+  let favError = $state('')
+
+  // Lyrics are only in single-track reads; fetched when first shown.
+  let showLyrics = $state(false)
+  let lyrics = $state<{ id: number; text: string | null } | null>(null)
+  let lyricsError = $state('')
+
+  // Nothing to show without a track (for example after the queue was cleared).
+  $effect(() => {
+    if (!track && ui.nowPlayingOpen) ui.nowPlayingOpen = false
+  })
+
+  $effect(() => {
+    document.documentElement.classList.toggle('rw-no-scroll', ui.nowPlayingOpen)
+    return () => document.documentElement.classList.remove('rw-no-scroll')
+  })
 
   $effect(() => {
     const t = track
-    if (!audio) return
-    if (!t) {
-      release()
-    } else if (t.id !== loadedId) {
-      load(t)
-    }
+    if (showLyrics && t && t.has_lyrics && lyrics?.id !== t.id) void loadLyrics(t)
   })
 
-  $effect(() => {
-    onPlayingChange?.(playing)
-  })
-
-  // Nothing to show without a track (for example after the session expired).
-  $effect(() => {
-    if (!track && expanded) expanded = false
-  })
-
-  $effect(() => {
-    onExpandedChange?.(expanded)
-    document.documentElement.classList.toggle('rw-no-scroll', expanded)
-  })
-
-  onDestroy(() => {
-    release()
-    document.documentElement.classList.remove('rw-no-scroll')
-  })
-
-  function load(t: Track) {
-    if (!audio) return
-    error = ''
-    notice = ''
-    current = 0
-    duration = t.duration_ms ? t.duration_ms / 1000 : 0
-    playing = false
-    loading = true
-    loadedId = t.id
-    // The browser fetches this URL itself, using Range requests to seek; the
-    // session cookie is sent automatically (same origin).
-    audio.src = streamUrl(t.id)
-    audio.load()
-    void start()
-  }
-
-  /** Stops playback and lets the browser release the previous media. */
-  function release() {
-    loadedId = null
-    playing = false
-    loading = false
-    if (audio) {
-      audio.pause()
-      audio.removeAttribute('src')
-      audio.load()
-    }
-  }
-
-  async function start() {
-    if (!audio) return
-    notice = ''
+  async function loadLyrics(t: Track) {
+    lyricsError = ''
     try {
-      await audio.play()
+      const full = await getTrack(t.id)
+      if (player.current?.id === t.id) lyrics = { id: t.id, text: full.lyrics ?? null }
     } catch (err) {
-      const name = err instanceof DOMException ? err.name : ''
-      if (name === 'NotAllowedError') {
-        loading = false
-        notice = 'Press play to start.'
-      }
-      // AbortError: a newer load replaced this one. NotSupportedError and
-      // network problems are reported through the element's error event.
-    }
-  }
-
-  function toggle() {
-    if (!audio || !track || error) return
-    if (playing) {
-      audio.pause()
-    } else {
-      void start()
-    }
-  }
-
-  function seek(event: Event) {
-    if (!audio) return
-    const value = Number((event.currentTarget as HTMLInputElement).value)
-    if (Number.isFinite(value)) {
-      audio.currentTime = value
-      current = value
-    }
-  }
-
-  function updateDuration() {
-    if (audio && Number.isFinite(audio.duration) && audio.duration > 0) {
-      duration = audio.duration
-    }
-  }
-
-  async function onError() {
-    const id = loadedId
-    const mediaError = audio?.error
-    if (id === null || !mediaError || mediaError.code === mediaError.MEDIA_ERR_ABORTED) return
-    loading = false
-    playing = false
-    // The media element does not expose HTTP status codes; ask the server.
-    const status = await streamStatus(id)
-    if (id !== loadedId) return // another track was selected meanwhile
-    switch (status) {
-      case 401:
-        error = 'Your session has expired. Sign in again.'
-        onUnauthorized()
-        break
-      case 404:
-        error = "This track's file was not found. It may have been moved or deleted; rescan the library."
-        break
-      case 409:
-        error = "This track's library folder is no longer configured."
-        break
-      case 503:
-        error = 'The library drive is not available. Check that it is plugged in and mounted.'
-        break
-      case 0:
-        error = 'Cannot reach the Rewind server.'
-        break
-      case 200:
-      case 206: {
-        const kind = track ? `${track.format.toUpperCase()}${track.codec ? ` (${track.codec})` : ''}` : 'this'
-        error = `This browser cannot play ${kind} files.`
-        break
-      }
-      default:
-        error = 'Playback failed.'
+      if ((err as { status?: number }).status === 401) onUnauthorized()
+      else lyricsError = err instanceof Error ? sentence(err.message) : 'Could not load the lyrics.'
     }
   }
 
   async function expand() {
-    if (!track || expanded) return
-    expanded = true
+    if (!track || ui.nowPlayingOpen) return
+    ui.nowPlayingOpen = true
     await tick()
     closeButton?.focus()
   }
 
   async function collapse() {
-    if (!expanded) return
-    expanded = false
+    if (!ui.nowPlayingOpen) return
+    ui.nowPlayingOpen = false
     await tick()
     openButton?.focus()
   }
 
   /** Escape closes; Tab stays inside the screen while it is open. */
   function onScreenKeydown(event: KeyboardEvent) {
-    if (event.key === 'Escape') {
+    if (event.key === 'Escape' && !event.defaultPrevented) {
       event.preventDefault()
       void collapse()
       return
     }
     if (event.key !== 'Tab' || !screenEl) return
-    const focusable = [...screenEl.querySelectorAll<HTMLElement>('button, input')].filter(
-      (el) => !(el as HTMLButtonElement | HTMLInputElement).disabled,
+    // Controls inside a closed <details> are not reachable, except its summary.
+    const focusable = [...screenEl.querySelectorAll<HTMLElement>('button, input, select, a[href], summary')].filter(
+      (el) => !(el as HTMLButtonElement).disabled && !(el.tagName !== 'SUMMARY' && el.closest('details:not([open])')),
     )
     if (focusable.length === 0) return
     const first = focusable[0]
@@ -222,7 +104,7 @@
   function headerSwipeDown(event: PointerEvent) {
     swipeStart = event.target instanceof Element && event.target.closest('.screen-head') ? event.clientY : null
   }
-  function swipeUp(event: PointerEvent, direction: 'up' | 'down') {
+  function swipeEnd(event: PointerEvent, direction: 'up' | 'down') {
     if (swipeStart === null) return
     const moved = event.clientY - swipeStart
     swipeStart = null
@@ -230,129 +112,198 @@
     if (direction === 'down' && moved > SWIPE_PX) void collapse()
   }
 
-  const metaLine = $derived(track ? [track.artist, track.album].filter(Boolean).join(' · ') : '')
-  const valueText = $derived(`${formatTime(current)} of ${formatTime(duration || undefined)}`)
+  function seekInput(event: Event) {
+    player.seek(Number((event.currentTarget as HTMLInputElement).value))
+  }
+
+  async function toggleFavorite() {
+    if (!track) return
+    favError = ''
+    try {
+      await listening.toggleFavorite(track)
+    } catch (err) {
+      if ((err as { status?: number }).status === 401) onUnauthorized()
+      else favError = err instanceof Error ? sentence(err.message) : 'Could not change the favorite.'
+    }
+  }
+
+  function go(hash: string) {
+    ui.nowPlayingOpen = false
+    navigate(hash)
+  }
+
+  const duration = $derived(player.duration)
+  const valueText = $derived(`${formatTime(player.position)} of ${formatTime(duration || undefined)}`)
+  const remaining = $derived(duration ? Math.max(duration - player.position, 0) : undefined)
+  const favorite = $derived(track ? listening.isFavorite(track) : false)
+  const repeatLabel = $derived(player.repeat === 'off' ? 'Repeat: off' : player.repeat === 'all' ? 'Repeat: all' : 'Repeat: one')
+  const artistLine = $derived(track ? (track.artist ?? track.album_artist ?? 'Unknown artist') : '')
+  const metaLine = $derived(track ? [artistLine, track.album].filter(Boolean).join(' · ') : '')
+  const position = $derived(player.index >= 0 ? `${player.index + 1} of ${player.entries.length}` : '')
+  const contextLabel = $derived(player.context?.name ? `${player.context.name} · ${position}` : position)
+  const status = $derived(player.loading ? 'Loading…' : player.notice)
+  const progressPct = $derived(duration ? Math.min((player.position / duration) * 100, 100) : 0)
+
+  function progressBar(node: HTMLElement, pct: number) {
+    node.style.setProperty('--progress', `${pct}%`)
+    return { update: (p: number) => node.style.setProperty('--progress', `${p}%`) }
+  }
+
+  function infoRows(t: Track): [string, string][] {
+    const rows: [string, string | undefined][] = [
+      ['Album artist', t.album_artist],
+      ['Track', t.track_number ? `${t.track_number}${t.disc_number ? ` (disc ${t.disc_number})` : ''}` : undefined],
+      ['Year', t.year ? String(t.year) : undefined],
+      ['Genre', t.genre],
+      ['Composer', t.composer],
+      ['Format', `${t.format.toUpperCase()}${t.codec ? ` · ${t.codec}` : ''}`],
+      ['Plays', t.play_count !== undefined ? String(t.play_count) : undefined],
+      ['File', t.relative_path],
+    ]
+    return rows.filter((r): r is [string, string] => !!r[1])
+  }
 </script>
 
-{#snippet artwork(size: 'small' | 'large')}
-  <!-- No artwork is indexed yet, so every track shows the same placeholder. -->
-  <span class="art art-{size}" aria-hidden="true">
-    <svg viewBox="0 0 24 24" focusable="false"><path d="M9 18.5a2.5 2.5 0 1 1-2-2.45V5.5l11-2v11a2.5 2.5 0 1 1-2-2.45V7.1l-7 1.27z" /></svg>
+{#snippet transport(big: boolean)}
+  <button
+    class="rw-button rw-button-secondary ctl"
+    class:big
+    type="button"
+    onclick={() => player.previous()}
+    disabled={!player.hasPrevious}
+    aria-label="Previous track"
+    title="Previous track (Shift+←)"><Icon name="previous" /></button
+  >
+  <button
+    class="rw-button ctl play"
+    class:big
+    type="button"
+    onclick={() => player.toggle()}
+    aria-label={player.playing ? 'Pause' : 'Play'}
+    title={`${player.playing ? 'Pause' : 'Play'} (Space)`}
+  >
+    <Icon name={player.playing ? 'pause' : 'play'} size={big ? '2rem' : '1.25rem'} />
+  </button>
+  <button
+    class="rw-button rw-button-secondary ctl"
+    class:big
+    type="button"
+    onclick={() => player.next()}
+    disabled={!player.hasNext}
+    aria-label="Next track"
+    title="Next track (Shift+→)"><Icon name="next" /></button
+  >
+{/snippet}
+
+{#snippet modes()}
+  <button
+    class="toggle"
+    type="button"
+    onclick={() => player.toggleShuffle()}
+    aria-pressed={player.shuffle}
+    aria-label="Shuffle"
+    title="Shuffle (S)"><Icon name="shuffle" /></button
+  >
+  <button class="toggle" type="button" onclick={() => player.cycleRepeat()} aria-pressed={player.repeat !== 'off'} aria-label={repeatLabel} title={`${repeatLabel} (R)`}>
+    <Icon name={player.repeat === 'one' ? 'repeatOne' : 'repeat'} />
+  </button>
+{/snippet}
+
+{#snippet volume(id: string)}
+  <span class="volume">
+    <button class="toggle" type="button" onclick={() => player.toggleMute()} aria-pressed={player.muted} aria-label="Mute" title="Mute (M)">
+      <Icon name={player.muted || player.volume === 0 ? 'mute' : 'volume'} />
+    </button>
+    <input
+      {id}
+      class="vol"
+      type="range"
+      min="0"
+      max="1"
+      step="0.05"
+      value={player.muted ? 0 : player.volume}
+      oninput={(e) => player.setVolume(Number(e.currentTarget.value))}
+      aria-label="Volume"
+      aria-valuetext={`${Math.round((player.muted ? 0 : player.volume) * 100)}%`}
+    />
   </span>
 {/snippet}
 
-{#snippet icon(name: 'previous' | 'next' | 'play' | 'pause' | 'collapse')}
-  <svg class="icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-    {#if name === 'previous'}<path d="M6 5h2v14H6zM20 5v14L9 12z" />
-    {:else if name === 'next'}<path d="M16 5h2v14h-2zM4 5v14l11-7z" />
-    {:else if name === 'play'}<path d="M7 4.5v15L20 12z" />
-    {:else if name === 'pause'}<path d="M6 4.5h4.5v15H6zM13.5 4.5H18v15h-4.5z" />
-    {:else}<path d="M5.4 8.6 12 15.2l6.6-6.6L20 10l-8 8-8-8z" />{/if}
-  </svg>
-{/snippet}
-
-<!--
-  The bar stays mounted while nothing is selected (only hidden), so the single
-  <audio> element survives view changes and is never recreated.
--->
-<section class="playbar" aria-label="Player" aria-busy={loading} hidden={!track} inert={expanded}>
-  <!-- svelte-ignore a11y_media_has_caption (music has no captions) -->
-  <audio
-    bind:this={audio}
-    preload="none"
-    onloadstart={() => (loading = !!loadedId)}
-    onwaiting={() => (loading = true)}
-    oncanplay={() => (loading = false)}
-    onplaying={() => {
-      loading = false
-      playing = true
-    }}
-    onplay={() => (playing = true)}
-    onpause={() => (playing = false)}
-    onended={() => {
-      playing = false
-      current = duration
-      onEnded?.()
-    }}
-    ontimeupdate={() => {
-      if (audio) current = audio.currentTime
-    }}
-    ondurationchange={updateDuration}
-    onloadedmetadata={updateDuration}
-    onerror={onError}
-  ></audio>
-
+<section class="playbar" aria-label="Player" aria-busy={player.loading} hidden={!track} inert={ui.nowPlayingOpen}>
   {#if track}
+    <span class="mini-progress" use:progressBar={progressPct} aria-hidden="true"></span>
     <button
       class="now"
       type="button"
       bind:this={openButton}
       onclick={expand}
       onpointerdown={swipeDown}
-      onpointerup={(e) => swipeUp(e, 'up')}
+      onpointerup={(e) => swipeEnd(e, 'up')}
       aria-haspopup="dialog"
-      aria-expanded={expanded}
+      aria-expanded={ui.nowPlayingOpen}
       aria-label={`Open Now Playing: ${track.title}`}
     >
-      {@render artwork('small')}
+      <span class="mini-art"><Artwork trackId={track.id} revision={track.revision} eager /></span>
       <span class="now-text">
         <span class="title" title={track.title}>{track.title}</span>
-        <span class="meta">{#if metaLine}{metaLine}{:else}&nbsp;{/if}</span>
-        {#if sequence}<span class="meta sequence">{sequence.label}</span>{/if}
+        <span class="meta" title={metaLine}>{metaLine || ' '}</span>
       </span>
     </button>
 
+    <button
+      class="toggle fav"
+      type="button"
+      onclick={toggleFavorite}
+      aria-pressed={favorite}
+      aria-label={`Favorite: ${track.title}`}
+      title="Favorite (F)"><Icon name={favorite ? 'heartFilled' : 'heart'} /></button
+    >
+
     <div class="transport">
-      <div class="buttons">
-        {#if sequence}
-          <button
-            class="rw-button rw-button-secondary step"
-            type="button"
-            onclick={sequence.onPrevious}
-            disabled={!sequence.hasPrevious}
-            aria-label="Previous track">&lt;</button
-          >
-        {/if}
-        <button class="rw-button play" type="button" onclick={toggle} disabled={!!error} aria-label={playing ? 'Pause' : 'Play'}>
-          {playing ? 'Pause' : 'Play'}
-        </button>
-        {#if sequence}
-          <button
-            class="rw-button rw-button-secondary step"
-            type="button"
-            onclick={sequence.onNext}
-            disabled={!sequence.hasNext}
-            aria-label="Next track">&gt;</button
-          >
-        {/if}
+      <div class="buttons">{@render transport(false)}</div>
+      <div class="seekrow">
+        <span class="time" aria-label="Elapsed time">{formatTime(player.position)}</span>
+        <input
+          class="seek"
+          type="range"
+          min="0"
+          max={duration || 0}
+          step="1"
+          value={player.position}
+          oninput={seekInput}
+          disabled={!duration || !!player.error}
+          aria-label="Seek"
+          aria-valuetext={valueText}
+        />
+        <span class="time" aria-label="Duration">{formatTime(duration || undefined)}</span>
       </div>
-      <span class="time" aria-label="Elapsed time">{formatTime(current)}</span>
-      <input
-        class="seek"
-        type="range"
-        min="0"
-        max={duration || 0}
-        step="1"
-        value={current}
-        oninput={seek}
-        disabled={!duration || !!error}
-        aria-label="Seek"
-        aria-valuetext={valueText}
-      />
-      <span class="time" aria-label="Duration">{formatTime(duration || undefined)}</span>
+    </div>
+
+    <div class="extras">
+      <span class="modes">{@render modes()}</span>
+      {@render volume('mini-volume')}
+      <button
+        class="toggle"
+        type="button"
+        onclick={() => ui.toggleQueue()}
+        aria-pressed={ui.queueOpen}
+        aria-label="Queue"
+        title="Queue (Q)"><Icon name="queue" /></button
+      >
     </div>
 
     <div class="message">
-      {#if error}
-        <p class="error" role="alert">{error}</p>
+      {#if player.error}
+        <p class="error" role="alert">{player.error}</p>
       {:else}
-        <p class="status" role="status" aria-live="polite">{#if loading}Loading…{:else if notice}{notice}{/if}</p>
+        <p class="status" role="status" aria-live="polite">{status}</p>
       {/if}
+      {#if favError}<p class="error" role="alert">{favError}</p>{/if}
     </div>
   {/if}
 </section>
 
-{#if expanded && track}
+{#if ui.nowPlayingOpen && track}
   <div
     class="screen"
     role="dialog"
@@ -362,7 +313,7 @@
     bind:this={screenEl}
     onkeydown={onScreenKeydown}
     onpointerdown={headerSwipeDown}
-    onpointerup={(e) => swipeUp(e, 'down')}
+    onpointerup={(e) => swipeEnd(e, 'down')}
   >
     <header class="screen-head">
       <button
@@ -371,21 +322,66 @@
         bind:this={closeButton}
         onclick={collapse}
         aria-label="Close Now Playing"
+        title="Close (Esc)"
       >
-        {@render icon('collapse')}
+        <Icon name="collapse" />
       </button>
       <p class="label">Now playing</p>
-      {#if sequence}<p class="label sequence-label">{sequence.label}</p>{/if}
+      {#if contextLabel}<p class="label context-label">{contextLabel}</p>{/if}
+      <span class="head-actions">
+        <button class="toggle" type="button" onclick={() => ui.openQueue()} aria-label="Queue" title="Queue (Q)"><Icon name="queue" /></button>
+        <TrackMenu track={track} context={player.context} {onUnauthorized} />
+      </span>
     </header>
 
     <div class="screen-body">
-      {@render artwork('large')}
+      <div class="art-col">
+        {#if showLyrics && track.has_lyrics}
+          <div class="lyrics" aria-label="Lyrics">
+            {#if lyricsError}<p class="rw-alert" role="alert">{lyricsError}</p>
+            {:else if lyrics?.id === track.id}<pre>{lyrics.text ?? ''}</pre>
+            {:else}<p class="rw-muted" role="status">Loading lyrics…</p>{/if}
+          </div>
+        {:else}
+          <span class="np-art"><Artwork trackId={track.id} size="large" shape="large" revision={track.revision} eager /></span>
+        {/if}
+      </div>
 
       <div class="details">
         <div class="info">
-          <h2 id="np-title" class="np-title">{track.title}</h2>
-          <p class="np-artist">{track.artist ?? 'Unknown artist'}</p>
-          {#if track.album}<p class="np-album">{track.album}</p>{/if}
+          <div class="title-row">
+            <h2 id="np-title" class="np-title">{track.title}</h2>
+            <button
+              class="toggle fav"
+              type="button"
+              onclick={toggleFavorite}
+              aria-pressed={favorite}
+              aria-label={`Favorite: ${track.title}`}
+              title="Favorite (F)"><Icon name={favorite ? 'heartFilled' : 'heart'} size="1.5rem" /></button
+            >
+          </div>
+          <p class="np-artist">
+            {#if track.artists && track.artists.length > 0}
+              {#each track.artists as a, i (a.id)}{#if i > 0}<span aria-hidden="true">, </span>{/if}<a
+                  href={artistHref(a.id)}
+                  onclick={(e) => {
+                    e.preventDefault()
+                    go(artistHref(a.id))
+                  }}>{a.name}</a
+                >{/each}
+            {:else}Unknown artist{/if}
+          </p>
+          {#if track.album}
+            <p class="np-album">
+              {#if track.album_id}<a
+                  href={albumHref(track.album_id)}
+                  onclick={(e) => {
+                    e.preventDefault()
+                    go(albumHref(track.album_id!))
+                  }}>{track.album}</a
+                >{:else}{track.album}{/if}{#if track.year}<span class="year"> · {track.year}</span>{/if}
+            </p>
+          {/if}
         </div>
 
         <div class="progress">
@@ -395,49 +391,56 @@
             min="0"
             max={duration || 0}
             step="1"
-            value={current}
-            oninput={seek}
-            disabled={!duration || !!error}
+            value={player.position}
+            oninput={seekInput}
+            disabled={!duration || !!player.error}
             aria-label="Seek"
             aria-valuetext={valueText}
           />
           <div class="times">
-            <span class="time" aria-label="Elapsed time">{formatTime(current)}</span>
-            <span class="time" aria-label="Duration">{formatTime(duration || undefined)}</span>
+            <span class="time" aria-label="Elapsed time">{formatTime(player.position)}</span>
+            <span class="time" aria-label="Remaining time">-{formatTime(remaining)}</span>
           </div>
         </div>
 
         <div class="controls">
-          {#if sequence}
-            <button
-              class="rw-button rw-button-secondary control"
-              type="button"
-              onclick={sequence.onPrevious}
-              disabled={!sequence.hasPrevious}
-              aria-label="Previous track">{@render icon('previous')}</button
-            >
+          {@render modes()}
+          {@render transport(true)}
+        </div>
+
+        <div class="secondary">
+          {@render volume('np-volume')}
+          <label class="speed">
+            <span class="rw-label">Speed</span>
+            <select class="rw-input" value={player.speed} onchange={(e) => player.setSpeed(Number(e.currentTarget.value))}>
+              {#each SPEEDS as s (s)}<option value={s}>{s}×</option>{/each}
+            </select>
+          </label>
+          {#if track.has_lyrics}
+            <button class="rw-button rw-button-secondary small" type="button" aria-pressed={showLyrics} onclick={() => (showLyrics = !showLyrics)}>
+              <Icon name="lyrics" />{showLyrics ? 'Artwork' : 'Lyrics'}
+            </button>
           {/if}
-          <button class="rw-button control main" type="button" onclick={toggle} disabled={!!error} aria-label={playing ? 'Pause' : 'Play'}>
-            {@render icon(playing ? 'pause' : 'play')}
-          </button>
-          {#if sequence}
-            <button
-              class="rw-button rw-button-secondary control"
-              type="button"
-              onclick={sequence.onNext}
-              disabled={!sequence.hasNext}
-              aria-label="Next track">{@render icon('next')}</button
-            >
-          {/if}
+          <span class="seek-steps">
+            <button class="rw-button rw-button-secondary small" type="button" onclick={() => player.seekBy(-SEEK_STEP_S)} title="Back 10 seconds (←)">−10s</button>
+            <button class="rw-button rw-button-secondary small" type="button" onclick={() => player.seekBy(SEEK_STEP_S)} title="Forward 10 seconds (→)">+10s</button>
+          </span>
         </div>
 
         <div class="screen-message">
-          {#if error}
-            <p class="error">{error}</p>
+          {#if player.error}
+            <p class="error" role="alert">{player.error}</p>
           {:else}
-            <p class="status">{#if loading}Loading…{:else if notice}{notice}{/if}</p>
+            <p class="status">{status}</p>
           {/if}
         </div>
+
+        <details class="track-info">
+          <summary>Track information</summary>
+          <dl>
+            {#each infoRows(track) as [k, v] (k)}<dt>{k}</dt><dd>{v}</dd>{/each}
+          </dl>
+        </details>
       </div>
     </div>
   </div>
@@ -450,11 +453,12 @@
     inset: auto var(--rw-space-3) calc(var(--rw-space-3) + env(safe-area-inset-bottom)) var(--rw-space-3);
     z-index: 10;
     display: grid;
-    grid-template-columns: minmax(10rem, 1fr) minmax(16rem, 2fr);
-    grid-template-areas: 'now transport' 'now message';
-    column-gap: var(--rw-space-5);
+    grid-template-columns: minmax(10rem, 1.2fr) auto minmax(16rem, 2fr) auto;
+    grid-template-areas: 'now fav transport extras' 'message message message message';
+    column-gap: var(--rw-space-3);
     align-items: center;
     padding: var(--rw-space-2) var(--rw-space-4);
+    overflow: hidden;
     border: var(--rw-border);
     border-radius: var(--rw-radius-xl);
     background: var(--rw-color-surface);
@@ -463,6 +467,14 @@
 
   .playbar[hidden] {
     display: none;
+  }
+
+  .mini-progress {
+    position: absolute;
+    inset: 0 auto auto 0;
+    width: var(--progress, 0%);
+    height: 3px;
+    background: var(--rw-color-accent);
   }
 
   .now {
@@ -479,7 +491,6 @@
     color: var(--rw-color-text);
     text-align: left;
     cursor: pointer;
-    /* Vertical pulls open the screen instead of scrolling the page. */
     touch-action: pan-x;
   }
 
@@ -487,52 +498,123 @@
     background: var(--rw-color-bg);
   }
 
+  .mini-art {
+    flex: none;
+    width: 2.75rem;
+  }
+
   .now-text {
     display: grid;
     min-width: 0;
   }
 
-  .title {
-    font-weight: var(--rw-font-weight-black);
+  .title,
+  .meta {
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+
+  .title {
+    font-weight: var(--rw-font-weight-black);
   }
 
   .meta {
     color: var(--rw-color-muted);
     font-size: var(--rw-font-size-sm);
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
+  }
+
+  .playbar > .fav {
+    grid-area: fav;
   }
 
   .transport {
     grid-area: transport;
     display: grid;
-    grid-template-columns: auto auto 1fr auto;
-    align-items: center;
-    gap: var(--rw-space-3);
+    gap: var(--rw-space-1);
     min-width: 0;
   }
 
   .buttons {
     display: flex;
+    justify-content: center;
+    gap: var(--rw-space-2);
+  }
+
+  .seekrow {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    align-items: center;
+    gap: var(--rw-space-2);
+  }
+
+  .extras {
+    grid-area: extras;
+    display: flex;
+    align-items: center;
     gap: var(--rw-space-1);
   }
 
-  .play {
-    min-width: 6.5rem;
+  .modes {
+    display: flex;
   }
 
-  .step {
-    min-width: 2.75rem;
-    padding-inline: var(--rw-space-2);
+  .ctl {
+    display: grid;
+    place-items: center;
+    width: 2.75rem;
+    min-height: 2.75rem;
+    padding: 0;
   }
 
-  .sequence {
-    font-family: var(--rw-font-mono);
-    font-size: 0.75rem;
+  .ctl.play:not(.big) {
+    width: 3.25rem;
+  }
+
+  .ctl.big {
+    width: 3.5rem;
+    height: 3.5rem;
+  }
+
+  .ctl.play.big {
+    width: 4.75rem;
+    height: 4.75rem;
+    border-radius: var(--rw-radius-round);
+    box-shadow: var(--rw-shadow);
+  }
+
+  .toggle {
+    display: grid;
+    place-items: center;
+    width: 2.75rem;
+    height: 2.75rem;
+    padding: 0;
+    border: var(--rw-border-width) solid transparent;
+    border-radius: var(--rw-radius-sm);
+    background: transparent;
+    color: var(--rw-color-muted);
+    cursor: pointer;
+  }
+
+  .toggle:hover {
+    color: var(--rw-color-text);
+    border-color: var(--rw-color-border);
+  }
+
+  /* On state: accent color plus a filled box, never color alone. */
+  .toggle[aria-pressed='true'] {
+    border-color: var(--rw-color-accent);
+    color: var(--rw-color-accent);
+  }
+
+  .volume {
+    display: flex;
+    align-items: center;
+  }
+
+  .vol {
+    width: 5.5rem;
+    accent-color: var(--rw-color-accent);
   }
 
   .time {
@@ -544,7 +626,6 @@
   .seek {
     width: 100%;
     min-width: 0;
-    /* A 44px-tall hit area for touch; the visible track stays thin. */
     height: 2.75rem;
     margin: 0;
     accent-color: var(--rw-color-accent);
@@ -576,34 +657,6 @@
   .error::before {
     content: 'Error: ';
     font-weight: var(--rw-font-weight-bold);
-  }
-
-  /* --- Artwork placeholder, shared by both views --- */
-  .art {
-    display: grid;
-    flex: none;
-    place-items: center;
-    aspect-ratio: 1;
-    border: var(--rw-border);
-    background: var(--rw-color-secondary);
-    color: var(--rw-color-on-secondary);
-  }
-
-  .art svg {
-    width: 45%;
-    height: 45%;
-    fill: currentColor;
-  }
-
-  .art-small {
-    width: 2.75rem;
-    border-radius: var(--rw-radius-sm);
-  }
-
-  .art-large {
-    width: 100%;
-    border-radius: var(--rw-radius-art);
-    box-shadow: var(--rw-shadow);
   }
 
   /* --- Now Playing screen --- */
@@ -638,7 +691,7 @@
     align-items: center;
     gap: var(--rw-space-2) var(--rw-space-4);
     width: 100%;
-    max-width: 60rem;
+    max-width: 64rem;
     margin: 0 auto;
     touch-action: pan-x;
   }
@@ -658,29 +711,62 @@
     text-transform: uppercase;
   }
 
-  .sequence-label {
-    margin-left: auto;
+  .context-label {
+    overflow: hidden;
     color: var(--rw-color-muted);
     font-weight: normal;
     letter-spacing: 0.04em;
+    text-overflow: ellipsis;
     text-transform: none;
+    white-space: nowrap;
+  }
+
+  .head-actions {
+    display: flex;
+    gap: var(--rw-space-1);
+    margin-left: auto;
   }
 
   .screen-body {
     display: grid;
-    grid-template-columns: minmax(0, min(26rem, 44vw)) minmax(0, 1fr);
+    grid-template-columns: minmax(0, min(28rem, 44vw)) minmax(0, 1fr);
     align-items: center;
     align-content: center;
     gap: var(--rw-space-6);
     width: 100%;
-    max-width: 60rem;
+    max-width: 64rem;
     margin: 0 auto;
     padding-block: var(--rw-space-5);
   }
 
+  .np-art {
+    display: block;
+  }
+
+  .np-art :global(.art) {
+    box-shadow: var(--rw-shadow);
+  }
+
+  .lyrics {
+    max-height: min(28rem, 60dvh);
+    overflow-y: auto;
+    padding: var(--rw-space-4);
+    border: var(--rw-border);
+    border-radius: var(--rw-radius-lg);
+    background: var(--rw-color-surface);
+  }
+
+  .lyrics pre {
+    margin: 0;
+    font: inherit;
+    line-height: 1.7;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
+
   .details {
     display: grid;
-    gap: var(--rw-space-5);
+    gap: var(--rw-space-4);
     min-width: 0;
   }
 
@@ -690,8 +776,16 @@
     min-width: 0;
   }
 
+  .title-row {
+    display: flex;
+    align-items: flex-start;
+    gap: var(--rw-space-2);
+  }
+
   .np-title {
     display: -webkit-box;
+    flex: 1;
+    min-width: 0;
     overflow: hidden;
     font-size: calc(clamp(1.75rem, 4vw, 3rem) * var(--rw-heading-scale));
     font-weight: var(--rw-font-weight-black);
@@ -715,6 +809,13 @@
     font-weight: var(--rw-font-weight-bold);
   }
 
+  .np-artist a,
+  .np-album a {
+    color: inherit;
+    text-decoration-thickness: 1px;
+    text-underline-offset: 0.2em;
+  }
+
   .np-album {
     color: var(--rw-color-muted);
   }
@@ -727,60 +828,106 @@
 
   .controls {
     display: flex;
+    flex-wrap: wrap;
     align-items: center;
-    gap: var(--rw-space-4);
+    gap: var(--rw-space-3);
   }
 
-  .control {
-    display: grid;
-    place-items: center;
-    width: 3.5rem;
-    height: 3.5rem;
-    padding: 0;
+  .secondary {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--rw-space-2) var(--rw-space-4);
   }
 
-  .control.main {
-    width: 4.75rem;
-    height: 4.75rem;
-    border-radius: var(--rw-radius-round);
-    box-shadow: var(--rw-shadow);
+  .speed {
+    display: flex;
+    align-items: center;
+    gap: var(--rw-space-2);
   }
 
-  .icon {
-    width: 1.5rem;
-    height: 1.5rem;
-    fill: currentColor;
+  .speed select {
+    width: auto;
+    min-height: 2.5rem;
+    padding-block: 0;
+    appearance: auto;
   }
 
-  .main .icon {
-    width: 2rem;
-    height: 2rem;
+  .small {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--rw-space-1);
+    min-height: 2.5rem;
+    padding-inline: var(--rw-space-3);
+  }
+
+  .seek-steps {
+    display: flex;
+    gap: var(--rw-space-1);
   }
 
   .screen-message {
     min-height: 1.5em;
   }
 
+  .track-info summary {
+    min-height: 2.75rem;
+    padding: var(--rw-space-2) 0;
+    font-family: var(--rw-font-mono);
+    font-size: var(--rw-font-size-sm);
+    text-transform: uppercase;
+    cursor: pointer;
+  }
+
+  .track-info dl {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    gap: var(--rw-space-1) var(--rw-space-4);
+    margin: 0;
+  }
+
+  .track-info dt {
+    color: var(--rw-color-muted);
+    font-size: var(--rw-font-size-sm);
+  }
+
+  .track-info dd {
+    margin: 0;
+    overflow-wrap: anywhere;
+  }
+
+  /* Tablet: fewer controls in the bar. */
+  @media (max-width: 64rem) {
+    .playbar {
+      grid-template-columns: minmax(0, 1.2fr) auto minmax(12rem, 1.5fr) auto;
+    }
+
+    .volume .vol,
+    .playbar .modes {
+      display: none;
+    }
+  }
+
+  /* Phones: a compact bar above the bottom navigation. */
   @media (max-width: 48rem) {
     .playbar {
-      inset: auto var(--rw-space-2) calc(var(--rw-space-2) + env(safe-area-inset-bottom)) var(--rw-space-2);
-      grid-template-columns: 1fr;
-      grid-template-areas: 'now' 'transport' 'message';
-      row-gap: var(--rw-space-1);
-      padding: var(--rw-space-2) var(--rw-space-3);
+      inset: auto var(--rw-space-2) calc(var(--rw-bottom-nav, 0px) + var(--rw-space-2) + env(safe-area-inset-bottom)) var(--rw-space-2);
+      grid-template-columns: minmax(0, 1fr) auto auto;
+      grid-template-areas: 'now fav transport' 'message message message';
+      padding: var(--rw-space-1) var(--rw-space-2);
       border-radius: var(--rw-radius-lg);
     }
 
-    .play {
-      min-width: 5rem;
-      padding-inline: var(--rw-space-3);
+    .seekrow,
+    .extras,
+    .buttons > :global(button:not(.play)) {
+      display: none;
     }
 
     .screen {
       padding-inline: calc(var(--rw-space-4) + env(safe-area-inset-left)) calc(var(--rw-space-4) + env(safe-area-inset-right));
     }
 
-    /* Vertical: artwork, then details; the artwork shrinks on short screens. */
     .screen-body {
       grid-template-columns: minmax(0, 1fr);
       justify-items: center;
@@ -789,7 +936,7 @@
       padding-block: var(--rw-space-4);
     }
 
-    .art-large {
+    .art-col {
       width: min(100%, 24rem, 42dvh);
     }
 

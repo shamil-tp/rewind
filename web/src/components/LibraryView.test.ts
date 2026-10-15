@@ -1,8 +1,23 @@
 import { fireEvent, render, screen, within } from '@testing-library/svelte'
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Track } from '../services/api'
+import { listening } from '../services/listening.svelte'
+import { player } from '../services/player.svelte'
 import { apiError, deferred, json, mockFetch } from '../test/fetch'
 import LibraryView from './LibraryView.svelte'
+
+beforeEach(() => {
+  vi.spyOn(HTMLMediaElement.prototype, 'play').mockImplementation(function (this: HTMLMediaElement) {
+    this.dispatchEvent(new Event('playing'))
+    return Promise.resolve()
+  })
+  vi.spyOn(HTMLMediaElement.prototype, 'pause').mockImplementation(function (this: HTMLMediaElement) {
+    this.dispatchEvent(new Event('pause'))
+  })
+  vi.spyOn(HTMLMediaElement.prototype, 'load').mockImplementation(() => {})
+  player.attach(() => {})
+})
+afterEach(() => player.detach())
 
 // Shapes match the real GET /api/tracks response (see docs/api.md).
 function track(id: number, extra: Partial<Track> = {}): Track {
@@ -29,11 +44,8 @@ const url = (extra = '') => `GET /api/tracks?page=1&limit=50${extra}&sort=artist
 
 function props(over: Record<string, unknown> = {}) {
   return {
-    currentId: null,
-    playing: false,
     reloadKey: 0,
     defaultSort: 'artist' as const,
-    onSelect: vi.fn(),
     onUnauthorized: vi.fn(),
     ...over,
   }
@@ -41,10 +53,10 @@ function props(over: Record<string, unknown> = {}) {
 
 async function rows() {
   const list = await screen.findByRole('list', { name: 'Tracks' })
-  // Each row is a play button plus an "add to playlist" button; return the play buttons.
+  // Each row is a play button, a favorite toggle and a menu; return the play buttons.
   return within(list)
     .getAllByRole('button')
-    .filter((b) => !b.getAttribute('aria-label')?.endsWith(' to a playlist'))
+    .filter((b) => b.getAttribute('aria-label')?.startsWith('Play '))
 }
 
 describe('LibraryView', () => {
@@ -154,22 +166,50 @@ describe('LibraryView', () => {
     expect(fetch).toHaveBeenCalledTimes(2)
   })
 
-  it('selects tracks and marks the current one with text, not colour only', async () => {
+  it('plays the listed tracks from the chosen one and marks it with text, not colour only', async () => {
     mockFetch({ [url()]: () => page([track(1), track(2), track(3, { available: false })]) })
-    const p = props({ currentId: 2, playing: true })
-    const { rerender } = render(LibraryView, { props: p })
+    render(LibraryView, { props: props() })
     const r = await rows()
+    await fireEvent.click(r[1])
+    expect(player.current?.id).toBe(2)
+    // The loaded list becomes the queue (Play now on the list).
+    expect(player.entries.map((e) => e.track.id)).toEqual([1, 2, 3])
+    expect(player.context?.kind).toBe('library')
     expect(r[1].getAttribute('aria-current')).toBe('true')
     expect(within(r[1]).getByText('Playing')).toBeTruthy()
-    await rerender({ ...p, playing: false })
-    expect(within(r[1]).getByText('Paused')).toBeTruthy()
+    player.pause()
+    await vi.waitFor(() => expect(within(r[1]).getByText('Paused')).toBeTruthy())
 
-    await fireEvent.click(r[0])
-    expect(p.onSelect).toHaveBeenCalledWith(expect.objectContaining({ id: 1 }))
     expect((r[2] as HTMLButtonElement).disabled).toBe(true)
     expect(r[2].getAttribute('aria-label')).toBe('Play Song 3 by Band (unavailable)')
     await fireEvent.click(r[2])
-    expect(p.onSelect).toHaveBeenCalledTimes(1)
+    expect(player.current?.id).toBe(2)
+  })
+
+  it('plays search results from the chosen track', async () => {
+    mockFetch({ [url()]: () => page([track(1)]), [url('&q=moon')]: () => page([track(9, { title: 'Moon' }), track(10)]) })
+    render(LibraryView, { props: props() })
+    await rows()
+    const box = screen.getByLabelText('Search')
+    await fireEvent.input(box, { target: { value: 'moon' } })
+    await fireEvent.submit(box.closest('form')!)
+    await vi.waitFor(async () => expect((await rows())[0].getAttribute('aria-label')).toBe('Play Moon by Band'))
+    await fireEvent.click((await rows())[0])
+    expect(player.current?.title).toBe('Moon')
+    expect(player.context?.name).toBe('Search: moon')
+  })
+
+  it('opens the track menu on right-click and toggles favorites', async () => {
+    mockFetch({ [url()]: () => page([track(1)]), 'PUT /api/favorites/tracks/1': () => json(200, { favorite: true }) })
+    render(LibraryView, { props: props() })
+    const [row] = await rows()
+    await fireEvent.contextMenu(row.closest('li')!)
+    expect(screen.getByRole('menu', { name: 'Actions for Song 1' })).toBeTruthy()
+    await fireEvent.keyDown(screen.getByRole('menu'), { key: 'Escape' })
+    expect(screen.queryByRole('menu')).toBeNull()
+    const fav = screen.getByRole('button', { name: 'Favorite: Song 1' })
+    await fireEvent.click(fav)
+    await vi.waitFor(() => expect(fav.getAttribute('aria-pressed')).toBe('true'))
   })
 
   it('reloads when the library changes', async () => {
@@ -210,22 +250,22 @@ describe('LibraryView', () => {
         }),
       'POST /api/playlists/9/tracks': () => json(201, { entry: { position: 1, added_at: '', track: track(2) } }),
     })
-    const p = props()
-    render(LibraryView, { props: p })
+    render(LibraryView, { props: props() })
     await rows()
-    const add = screen.getByRole('button', { name: 'Add Song 2 to a playlist' })
-    await fireEvent.click(add)
-    expect(add.getAttribute('aria-expanded')).toBe('true')
+    const more = screen.getByRole('button', { name: 'More actions for Song 2' })
+    await fireEvent.click(more)
+    expect(more.getAttribute('aria-expanded')).toBe('true')
+    await fireEvent.click(screen.getByRole('menuitem', { name: 'Add to playlist…' }))
     const select = (await screen.findByLabelText('Add to playlist')) as HTMLSelectElement
     await vi.waitFor(() => expect(document.activeElement).toBe(select))
     await fireEvent.change(select, { target: { value: '9' } })
     await fireEvent.click(screen.getByRole('button', { name: 'Add' }))
-    expect(await screen.findByText('Added “Song 2” to “Calm”.')).toBeTruthy()
+    await vi.waitFor(() => expect(listening.announcement).toBe('Added “Song 2” to “Calm”.'))
     expect(screen.queryByLabelText('Add to playlist')).toBeNull()
     const post = fetch.mock.calls.find(([, i]) => i?.method === 'POST')!
     expect(JSON.parse(String(post[1]?.body))).toEqual({ track_id: 2 })
     // Adding never starts playback.
-    expect(p.onSelect).not.toHaveBeenCalled()
+    expect(player.current).toBeNull()
   })
 
   it('reports a duplicate and keeps the panel open', async () => {
@@ -237,7 +277,8 @@ describe('LibraryView', () => {
     })
     render(LibraryView, { props: props() })
     await rows()
-    await fireEvent.click(screen.getByRole('button', { name: 'Add Song 1 to a playlist' }))
+    await fireEvent.click(screen.getByRole('button', { name: 'More actions for Song 1' }))
+    await fireEvent.click(screen.getByRole('menuitem', { name: 'Add to playlist…' }))
     await screen.findByLabelText('Add to playlist')
     await fireEvent.click(screen.getByRole('button', { name: 'Add' }))
     expect((await screen.findByRole('alert')).textContent).toBe('The track is already in this playlist.')
@@ -250,7 +291,8 @@ describe('LibraryView', () => {
     mockFetch({ [url()]: () => page([track(1)]), 'GET /api/playlists': () => json(200, { items: [] }) })
     render(LibraryView, { props: props() })
     await rows()
-    await fireEvent.click(screen.getByRole('button', { name: 'Add Song 1 to a playlist' }))
+    await fireEvent.click(screen.getByRole('button', { name: 'More actions for Song 1' }))
+    await fireEvent.click(screen.getByRole('menuitem', { name: 'Add to playlist…' }))
     const link = await screen.findByRole('link', { name: 'Create one in Playlists' })
     expect(link.getAttribute('href')).toBe('#/playlists')
   })

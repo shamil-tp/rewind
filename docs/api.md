@@ -2,8 +2,9 @@
 
 Status: **Phase 10.** This page documents only the endpoints that exist:
 health, authentication, the read-only music-library API with a rescan
-trigger, audio streaming, playlists, preferences, themes and read-only
-plugin status.
+trigger, audio streaming, albums and artists, artwork, metadata edits,
+favorites, listening history, the saved play queue, playlists, preferences,
+themes and read-only plugin status.
 
 ## Conventions
 
@@ -303,6 +304,12 @@ Track fields:
 | `root_id`, `title`, `format`, `size_bytes`, `relative_path`, `status`, `available`, `metadata_status`, `added_at`, `updated_at` | always | `title` falls back to the file name; `available` is true when the file was found **and** its root is enabled and currently available |
 | `artist`, `album`, `album_artist`, `genre`, `release_date`, `year`, `track_number`, `disc_number`, `duration_ms`, `codec` | if known | from the file's tags and audio stream |
 | `metadata_error` | if metadata failed | short reason, with root paths removed |
+| `composer` | if known | from tags or an edit |
+| `has_lyrics` | always | whether lyrics are stored; the text itself (`lyrics`) is only in `GET /api/tracks/{id}` |
+| `revision` | always | changes with every metadata change (scan or edit) |
+| `album_id` | if the track has an album | the album's ID (see [Albums and artists](#albums-and-artists)) |
+| `artists` | always | `[{"id", "name"}]` for each artist credited (artist field, or album artist when no artist is tagged) |
+| `favorite`, `play_count`, `last_played_at` | always (`last_played_at` if played) | the signed-in user's favorite flag and listening history |
 | `missing_since` | if `status` is `missing` | when the file was first found missing |
 
 A `page` beyond the last page returns an empty `items` list with the correct
@@ -413,6 +420,244 @@ the player says so; it checks the stream with a `HEAD` request to tell
 decoding problems apart from missing files, unplugged drives and expired
 sessions.
 
+## Albums and artists
+
+Albums and artists are derived from track tags (no separate tables), so they
+always agree with the library and with metadata edits:
+
+- An **album** is the set of tracks with the same album title and album
+  artist (or artist, when no album artist is tagged), compared
+  case-insensitively for ASCII letters. Tracks without an album title belong
+  to no album. A compilation is one album when its tracks share an album
+  artist such as "Various Artists"; without one, each artist's tracks form
+  their own album (set the album artist with the album editor to merge them).
+- An **artist** is a name credited in a track's artist or album artist
+  field. Several artists in one field are separated by `"; "` (how the
+  scanner joins multi-value tags), so `"A; B"` credits both.
+- **IDs** are the grouping keys encoded with base64url: stable across scans
+  and restarts, changed only when the defining tags change. `~` is the
+  artist ID of tracks that credit no artist. Treat IDs as opaque.
+
+Every route requires a session and returns `Cache-Control: no-store`. Tracks
+in responses carry the signed-in user's `favorite`, `play_count` and
+`last_played_at`.
+
+### `GET /api/albums`
+
+| Parameter | Default | Values |
+| --- | --- | --- |
+| `page`, `limit` | `1`, `50` | as for tracks |
+| `q` | | substring of the album title, album artist or artist |
+| `sort` | `title` | `title`, `artist`, `year`, `added` |
+| `order` | `asc` | `asc`, `desc` |
+
+```json
+{"items": [{"id": "YmFuZB9yZWNvcmQ", "title": "Record", "artist": "Band", "artists": [{"id": "YmFuZA", "name": "Band"}],
+  "year": 2001, "genre": "Rock", "track_count": 12, "disc_count": 2, "duration_ms": 2950000, "unavailable_count": 0,
+  "artwork_track_id": 42, "added_at": "…"}],
+ "pagination": {"page": 1, "limit": 50, "total": 1, "total_pages": 1}}
+```
+
+Only albums with present tracks in enabled roots are listed.
+`artwork_track_id` is a track whose artwork represents the album (see
+[Artwork](#artwork)).
+
+### `GET /api/albums/{id}`
+
+`{"album": {...}}`: the album fields plus `version` (for edits), `folders`
+(the directories of its files as `"<library name>/<path>"`, never absolute
+paths) and `tracks`, ordered by disc number, track number, title and ID
+(tracks without numbers last). Missing files are included with
+`status: "missing"`. `404 not_found` for an unknown ID.
+
+### `PATCH /api/albums/{id}/metadata`
+
+Body: `{"version": "<from GET>", "changes": {"album": "…", "album_artist": "…", "year": 2001, "genre": "…"}}`
+(any subset; `null` clears a field). Applies the changes to **every track of
+the album** in one transaction, as database-only edits (see
+[Metadata](#metadata)). Returns `{"id": "<album ID>"}`, which changes when
+the title or album artist changes. `409 edit_conflict` when the album
+changed since `version` was read (another edit or a rescan): nothing is
+saved. `422 validation_failed` for other fields or invalid values.
+
+### `GET /api/artists`
+
+Like albums, with `sort` `name` (default), `tracks` or `albums`. Items:
+`{"id", "name", "track_count", "album_count", "duration_ms", "artwork_track_id"}`.
+
+### `GET /api/artists/{id}`
+
+```json
+{"artist": {"id": "…", "name": "Band", "track_count": 40, "album_count": 3, "duration_ms": 9000000, "artwork_track_id": 7,
+            "version": "…", "albums": [Album], "appears_on": [Album], "tracks": [Track], "tracks_truncated": false},
+ "top_tracks": [Track], "recent_tracks": [Track], "listening_ms": 5400000}
+```
+
+`albums` are albums whose album artist credits the artist; `appears_on` are
+other albums with tracks crediting it (its tracks only). `tracks` lists up to
+2,000 tracks ordered by year, album and position. `top_tracks` (most played
+by you) and `recent_tracks` hold up to 10 each; `listening_ms` is your total
+listened time for the artist.
+
+### `PATCH /api/artists/{id}/name`
+
+Body: `{"version": "<from GET>", "name": "New name"}`. Replaces the name in
+the artist and album artist fields of every track crediting it; other
+credited artists are kept. Database-only, one transaction. Returns
+`{"id": "<new ID>"}`; `409 edit_conflict` when out of date. The name may not
+contain `;`. The unknown artist (`~`) cannot be renamed.
+
+## Artwork
+
+### `GET|HEAD /api/tracks/{id}/artwork?size=small|large`
+
+A JPEG rendition of the track's artwork: at most 320 px (`small`, default)
+or 1000 px (`large`) on the longer side, aspect ratio kept. The image is
+taken from the file's embedded picture or, failing that, from a cover image
+in the same folder (`cover`, `folder`, `front` or `album` with `.jpg`,
+`.jpeg` or `.png`, any case). Music files are only read.
+
+- Renditions are cached in `<REWIND_DATA_DIR>/artwork`, named by the hash
+  of the source image (tracks of an album share them), and recorded per
+  track against the file's size and modification time; a changed file is
+  read again after the next scan. "No artwork" is remembered too.
+- Source images are checked before decoding: JPEG, PNG or GIF, at most
+  16 MiB, 12,000 px per side and 25 megapixels. Anything else counts as no
+  artwork.
+- `Cache-Control: private, max-age=86400` and an `ETag`; `If-None-Match`
+  gives `304`. Clients may add `v=<track revision>` to bypass a cached copy
+  after the track changed; the server ignores it.
+- While a drive is unplugged, the last cached rendition is still served.
+- `404 no_artwork` when there is none; `404 track_not_found` for an
+  unknown track.
+
+## Metadata
+
+Metadata edits are stored **in Rewind's database only**. Rewind never writes
+tags into music files. An edit replaces the tag value Rewind shows
+everywhere (library, search, albums, artists, playlists); the original tag
+value is remembered, rescans keep the edit (applying it again on top of the
+re-read tags), and an edit can be reverted per field.
+
+Editable fields: `title` (required), `artist`, `album_artist`, `album`,
+`genre`, `composer` (text, at most 512 characters), `track_number`,
+`disc_number` (1–9999), `year` (1000–9999) and `lyrics` (at most 20,000
+characters, line breaks kept). Text is Unicode; control characters are
+removed. `null` (or empty text) clears a field.
+
+### `GET /api/tracks/{id}/metadata`
+
+```json
+{"metadata": {"track_id": 42, "revision": 7, "values": {"title": "…", "year": 2001, "lyrics": null},
+              "edited": ["title"], "from_file": {"title": "Original title"}, "updated_at": "…"},
+ "fields": [{"Name": "title", "Kind": "text", "Min": 0, "Max": 512, "Required": true}],
+ "track": Track}
+```
+
+`revision` changes with every metadata change (edit or rescan of the file).
+
+### `PATCH /api/tracks/{id}/metadata`
+
+Body: `{"revision": 7, "changes": {"title": "…", "year": null}}`. Saves if
+the track's revision is still 7; otherwise `409 edit_conflict` and nothing is
+saved. A change back to the file's value removes the edit for that field.
+Returns the same shape as `GET`. `422 validation_failed` for unknown fields
+or invalid values.
+
+### `POST /api/tracks/{id}/metadata/revert`
+
+Body: `{"revision": 8, "fields": ["title"]}` (omit `fields` to revert all
+edits). Restores the file's values. Same responses as `PATCH`.
+
+## Favorites
+
+- `PUT /api/favorites/tracks/{id}` and `DELETE /api/favorites/tracks/{id}`
+  mark or unmark a track; repeating either is harmless. `200
+  {"track_id": 42, "favorite": true}`, or `404 track_not_found`.
+- `GET /api/favorites/tracks?page=&limit=`: your favorites, most recently
+  added first, as a track page.
+
+## Listening history
+
+A **play** is recorded once the listened time of one playback reaches your
+threshold (preference `play_threshold_percent` of the track, at most four
+minutes). Queueing a track or opening its page never counts. Play counts
+and last-played times are computed from the history, so clearing history
+resets them. History keeps tracks whose files are missing (their `status`
+says so).
+
+### `POST /api/history`
+
+Body: `{"track_id": 42, "play_key": "3f6c…", "listened_ms": 125000, "source_kind": "album", "source_id": "…"}`.
+
+- `play_key` (8–64 letters, digits, `-` or `_`) identifies one playback of
+  one track; the client generates it. A repeated key is ignored, so
+  retries never count twice: `201 {"recorded": true}` the first time,
+  `200 {"recorded": false}` afterwards.
+- `source_kind` is optional: `library`, `album`, `artist`, `playlist`,
+  `history`, `queue` or `favorites`; `source_id` (at most 1024 characters)
+  identifies it.
+- With preference `record_history` off, nothing is recorded:
+  `200 {"recorded": false, "reason": "history_disabled"}`.
+
+### `GET /api/history`
+
+| Parameter | Default | Values |
+| --- | --- | --- |
+| `page`, `limit` | `1`, `50` | as for tracks |
+| `q` | | substring of title, artist or album |
+| `from`, `to` | | RFC 3339 times (`to` is exclusive) |
+| `order` | `desc` | `desc` (newest first), `asc` |
+
+Items: `{"id", "played_at", "listened_ms", "source_kind", "source_id", "track": Track}`.
+
+### `DELETE /api/history`
+
+Body `{"ids": [1, 2]}` (at most 1000) removes those plays, or
+`{"all": true}` removes all of yours. Returns `{"deleted": 2}`.
+
+### `GET /api/history/recent?limit=12`
+
+`{"tracks": [Track], "albums": [{"id", "title", "artist", "artists", "artwork_track_id", "last_played_at"}],
+"artists": [{"id", "name", "artwork_track_id", "last_played_at"}]}`: distinct, most recent first (limit 1–100).
+
+### `GET /api/history/top?limit=25`
+
+`{"items": [Track]}`: your most played tracks (at least one play), with
+`play_count`.
+
+## Playback state
+
+The play queue and playback settings are saved per user, so they survive
+refreshes, browser restarts and switching devices. Volume and mute are per
+device (browser storage), not saved here.
+
+### `GET /api/playback`
+
+```json
+{"revision": 1760000000000,
+ "state": {"queue": [7, 42, 7], "original": [42, 7, 7], "index": 1, "position_ms": 61500, "shuffle": true,
+           "repeat": "all", "speed": 1.25, "context": {"kind": "album", "id": "…", "name": "Record"}},
+ "tracks": [Track]}
+```
+
+`queue` is the play order (a track may appear twice); `original` is the
+order before shuffling, present only while shuffle is on; `index` the
+current entry (`-1` for none); `context` where playback started. `tracks`
+holds each queued track once, so a client restores in one request. Entries
+whose tracks no longer exist are dropped and `index` follows its track.
+Without saved state: an empty queue, `index -1`, `repeat "off"`, `speed 1`.
+
+### `PUT /api/playback`
+
+Body: `{"revision": <integer>, "state": {...}}`. Saved only if `revision` is
+greater than the stored one; otherwise `409 stale_state` and the newer state
+is kept (a late request can never overwrite a newer queue). Clients use a
+growing value such as the current time in milliseconds. Validation: at most
+10,000 queued tracks, positive IDs, `original` with exactly the same tracks,
+`index` inside the queue, `repeat` `off`/`all`/`one`, `speed` 0.5–2.
+`422 validation_failed` otherwise. The body may be up to 512 KiB.
+
 ## Playlists
 
 Every playlist endpoint **requires a session**, sends `Cache-Control:
@@ -517,6 +762,24 @@ Body: `{"track_id": 42}`. Appends the track. Any indexed track can be added,
 including one that is unavailable right now. Returns
 `201 {"entry": {"position": 13, "added_at": "…", "track": Track}}`.
 
+Body `{"track_ids": [42, 7, 13]}` (at most 5,000) appends several tracks in
+one transaction, in order. Tracks already in the playlist (or listed twice)
+are skipped, not an error. Every ID must be an indexed track, otherwise
+`404 track_not_found` and nothing is added. Returns
+`200 {"added": 2, "skipped": 1, "playlist": PlaylistDetail}`.
+
+### `POST /api/playlists/{id}/duplicate`
+
+Copies the playlist (description, artwork choice and tracks in order) under
+a free name such as `"Road trip (copy)"` or `"Road trip (copy 2)"`.
+`201 {"playlist": Playlist}`.
+
+### `PUT /api/playlists/{id}/artwork`
+
+Body: `{"track_id": 42}` chooses the track whose artwork represents the
+playlist; `{"track_id": null}` returns to the first track's. Playlists
+report `artwork_track_id` (chosen or first track) and `artwork_chosen`.
+
 ### `PUT /api/playlists/{id}/tracks`
 
 Body: `{"track_ids": [7, 42, 13]}`: the **complete** new order, each current
@@ -551,7 +814,9 @@ upgrade) is ignored in favour of the default.
 | Key | Values | Default | Effect in the web UI |
 | --- | --- | --- | --- |
 | `library_sort` | `artist`, `album`, `title`, `added`, `year`, `duration` | `artist` | Initial sort of the library. `added` means newest first and `duration` longest first; the others are ascending. |
-| `autoplay_next` | `true`, `false` | `true` | When a playlist track ends, play the next available one. |
+| `autoplay_next` | `true`, `false` | `true` | When a track ends, play the next available one in the queue ("Continue playing"). |
+| `play_threshold_percent` | 10–100 | `50` | How much of a track (in percent, at most four minutes) must be played before it is recorded in the history. |
+| `record_history` | `true`, `false` | `true` | `false` is a privacy mode: the server records no plays. |
 | `theme` | The ID of an available theme (bundled or installed) | `rewind-dark` | The active theme. Prefer `PUT /api/themes/active`, which also checks that the theme is enabled and records it for "return to the previous theme". A saved ID that is no longer available reads as `rewind-dark`. |
 | `accent_color` | `""` or `#rrggbb` (six **lower-case** hex digits) | `""` | Earlier custom colors, kept for compatibility: these three apply only to themes the user has not customized (reported as their `legacy` customization, see [Themes](#themes)). Custom accent (progress, playing markers, focus ring); `""` uses the theme's. The server checks only the format; the web UI also requires 4.5:1 contrast with the theme in use and ignores an accent that falls short. |
 | `primary_color` | `""` or `#rrggbb` | `""` | Custom primary color (main buttons, links, selected navigation). `""` uses a custom `accent_color` if one is set, otherwise the theme's. Same checks as `accent_color`. |

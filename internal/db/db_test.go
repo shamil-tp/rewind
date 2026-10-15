@@ -597,3 +597,67 @@ func TestUpgradeAddsThemeSettings(t *testing.T) {
 		t.Errorf("theme rows after deleting the user = %d", settings)
 	}
 }
+
+// TestUpgradeAddsListeningTables upgrades a database at migration 0005 with
+// data and checks that 0006 keeps it, adds its columns with defaults, and
+// enforces its constraints.
+func TestUpgradeAddsListeningTables(t *testing.T) {
+	path := filepath.Join(t.TempDir(), FileName)
+	if err := createFileIfMissing(path); err != nil {
+		t.Fatal(err)
+	}
+	conn, err := sql.Open("sqlite", "file:"+filepath.ToSlash(path)+"?_pragma=foreign_keys(1)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := fstest.MapFS{}
+	for _, name := range []string{"0001_auth.sql", "0002_library.sql", "0003_playlists.sql", "0004_preferences.sql", "0005_themes.sql"} {
+		old["migrations/"+name] = &fstest.MapFile{Data: mustRead(t, "migrations/"+name)}
+	}
+	if _, err := migrate(context.Background(), conn, old); err != nil {
+		t.Fatal(err)
+	}
+	for _, q := range []string{
+		`INSERT INTO users (id, username, password_hash, created_at, updated_at, password_changed_at) VALUES (1, 'owner', 'h', 1, 1, 1)`,
+		`INSERT INTO library_roots (id, configured_path, path, created_at) VALUES (1, '/m', '/m', 1)`,
+		`INSERT INTO tracks (id, root_id, rel_path, file_size, file_mtime_ns, format, title, album, metadata_status, first_seen_at, updated_at)
+			VALUES (1, 1, 'a.mp3', 1, 1, 'mp3', 'Kept', 'Album', 'ok', 1, 1)`,
+		`INSERT INTO playlists (id, user_id, name, created_at, updated_at) VALUES (1, 1, 'Mix', 1, 1)`,
+		`INSERT INTO playlist_tracks (playlist_id, track_id, position, added_at) VALUES (1, 1, 0, 1)`,
+	} {
+		if _, err := conn.Exec(q); err != nil {
+			t.Fatal(err)
+		}
+	}
+	conn.Close()
+
+	db, err := Open(context.Background(), path, discard)
+	if err != nil {
+		t.Fatalf("upgrade Open() error = %v", err)
+	}
+	defer db.Close()
+	var title string
+	var version, revision, entries int
+	var artwork sql.NullInt64
+	db.QueryRow("SELECT title, metadata_version, revision FROM tracks").Scan(&title, &version, &revision)
+	db.QueryRow("SELECT count(*) FROM playlist_tracks").Scan(&entries)
+	db.QueryRow("SELECT artwork_track_id FROM playlists").Scan(&artwork)
+	if title != "Kept" || version != 0 || revision != 0 || entries != 1 || artwork.Valid {
+		t.Errorf("after upgrade: %q v%d r%d entries %d artwork %v", title, version, revision, entries, artwork)
+	}
+	for _, bad := range []string{
+		`INSERT INTO favorites (user_id, track_id, created_at) VALUES (1, 99, 1)`,
+		`INSERT INTO play_history (user_id, track_id, played_at, listened_ms, play_key) VALUES (1, 1, 1, 0, 'short')`,
+		`INSERT INTO play_history (user_id, track_id, played_at, listened_ms, play_key) VALUES (1, 1, 1, -5, 'long-enough-key')`,
+		`INSERT INTO track_artwork (track_id, file_size, file_mtime_ns, status, checked_at) VALUES (1, 1, 1, 'maybe', 1)`,
+		`INSERT INTO playback_state (user_id, state, revision, updated_at) VALUES (1, '', 1, 1)`,
+	} {
+		if _, err := db.Exec(bad); err == nil {
+			t.Errorf("constraint not enforced: %s", bad)
+		}
+	}
+	db.Exec(`INSERT INTO play_history (user_id, track_id, played_at, listened_ms, play_key) VALUES (1, 1, 1, 0, 'long-enough-key')`)
+	if _, err := db.Exec(`INSERT INTO play_history (user_id, track_id, played_at, listened_ms, play_key) VALUES (1, 1, 2, 0, 'long-enough-key')`); err == nil {
+		t.Error("duplicate play key accepted")
+	}
+}

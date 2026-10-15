@@ -50,11 +50,18 @@ type Preferences struct {
 	// SecondaryColor replaces the theme's secondary color (secondary buttons
 	// and supporting surfaces); same format.
 	SecondaryColor string `json:"secondary_color"`
+	// PlayThresholdPercent is how much of a track (in percent of its length,
+	// at most four minutes) must be played before it counts as played and
+	// is added to the listening history.
+	PlayThresholdPercent int `json:"play_threshold_percent"`
+	// RecordHistory turns listening history on; false is a privacy mode in
+	// which plays are not recorded.
+	RecordHistory bool `json:"record_history"`
 }
 
 // Defaults returns the values used when nothing was saved.
 func Defaults() Preferences {
-	return Preferences{LibrarySort: "artist", AutoplayNext: true, Theme: "rewind-dark"}
+	return Preferences{LibrarySort: "artist", AutoplayNext: true, Theme: "rewind-dark", PlayThresholdPercent: 50, RecordHistory: true}
 }
 
 // LibrarySorts lists the accepted library_sort values.
@@ -114,6 +121,22 @@ var keys = map[string]key{
 	}},
 	"secondary_color": {apply: func(raw json.RawMessage, p *Preferences) error {
 		return color(raw, &p.SecondaryColor)
+	}},
+	"play_threshold_percent": {apply: func(raw json.RawMessage, p *Preferences) error {
+		var v int
+		if err := decode(raw, &v); err != nil || v < 10 || v > 100 {
+			return fmt.Errorf("must be a whole number from 10 to 100")
+		}
+		p.PlayThresholdPercent = v
+		return nil
+	}},
+	"record_history": {apply: func(raw json.RawMessage, p *Preferences) error {
+		var v bool
+		if err := decode(raw, &v); err != nil {
+			return fmt.Errorf("must be true or false")
+		}
+		p.RecordHistory = v
+		return nil
 	}},
 	"autoplay_next": {apply: func(raw json.RawMessage, p *Preferences) error {
 		var v bool

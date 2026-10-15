@@ -119,12 +119,19 @@ func newTestEnvWith(t testing.TB, c envConfig) *testEnv {
 		t.Fatal(err)
 	}
 	preferences := prefs.NewStore(conn, prefs.WithThemes(themes.Has))
+	catalog := library.NewCatalog(conn)
+	artwork, err := library.NewArtworkCache(conn, catalog, filepath.Join(c.dataDir, "artwork"))
+	if err != nil {
+		t.Fatal(err)
+	}
 	env.opts = Options{
 		Frontend: testFrontend(), Version: "test", Auth: svc, SetupCode: code,
 		Limiter: c.limiter, CookieSecure: c.secure, Logger: logger,
-		Catalog: library.NewCatalog(conn), Scanner: scanner, MaxPageSize: c.maxPageSize,
+		Catalog: catalog, Scanner: scanner, MaxPageSize: c.maxPageSize,
 		Playlists: library.NewPlaylists(conn), Preferences: preferences,
-		Themes:       theme.NewStore(conn, themes, preferences),
+		Themes:   theme.NewStore(conn, themes, preferences),
+		Personal: library.NewPersonal(conn), Editor: library.NewEditor(conn),
+		Playback: library.NewPlaybackStore(conn), Artwork: artwork,
 		TrustedHosts: c.trustedHosts, Plugins: c.plugins,
 	}
 	env.handler, err = newHandler(env.opts, func(mux *http.ServeMux, requireAuth func(http.Handler) http.Handler) {

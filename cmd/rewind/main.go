@@ -122,6 +122,21 @@ func run(ctx context.Context, getenv func(string) string, logOut io.Writer) erro
 	}
 	preferences := prefs.NewStore(conn, prefs.WithThemes(themes.Has))
 
+	// Artwork renditions are cached in the data directory, never next to the
+	// music. Unreferenced files are removed in the background.
+	catalog := library.NewCatalog(conn)
+	artwork, err := library.NewArtworkCache(conn, catalog, filepath.Join(cfg.DataDir, "artwork"))
+	if err != nil {
+		return err
+	}
+	go func() {
+		if n, err := artwork.Cleanup(ctx); err != nil {
+			logger.Warn("artwork cache cleanup failed", "err", err)
+		} else if n > 0 {
+			logger.Info("removed unused artwork cache files", "count", n)
+		}
+	}()
+
 	frontend, err := web.Frontend()
 	if err != nil {
 		return fmt.Errorf("loading frontend: %w", err)
@@ -130,9 +145,11 @@ func run(ctx context.Context, getenv func(string) string, logOut io.Writer) erro
 		Frontend: frontend, Version: version,
 		Auth: authSvc, SetupCode: setupCode, Limiter: auth.NewLimiter(),
 		CookieSecure: cfg.CookieSecure, Logger: logger,
-		Catalog: library.NewCatalog(conn), Scanner: scanner, MaxPageSize: cfg.MaxPageSize,
+		Catalog: catalog, Scanner: scanner, MaxPageSize: cfg.MaxPageSize,
 		Playlists: library.NewPlaylists(conn), Preferences: preferences,
-		Themes:       theme.NewStore(conn, themes, preferences),
+		Themes:   theme.NewStore(conn, themes, preferences),
+		Personal: library.NewPersonal(conn), Editor: library.NewEditor(conn),
+		Playback: library.NewPlaybackStore(conn), Artwork: artwork,
 		TrustedHosts: cfg.AllowedHosts(), Plugins: plugins,
 	})
 	if err != nil {

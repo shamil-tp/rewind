@@ -1,8 +1,9 @@
 <script lang="ts">
   import { onDestroy, untrack } from 'svelte'
-  import { ApiError, createPlaylist, listPlaylists, type Playlist, type PlaylistDetail as Detail } from '../services/api'
+  import { ApiError, createPlaylist, listPlaylists, type Playlist } from '../services/api'
   import { formatTime } from '../services/format'
   import { sentence } from '../services/validation'
+  import Artwork from './Artwork.svelte'
   import PlaylistDetail from './PlaylistDetail.svelte'
 
   interface Props {
@@ -10,12 +11,9 @@
     playlistId: number | null
     /** Whether this view is on screen; data is refreshed each time it is shown. */
     active: boolean
-    currentId: number | null
-    playing: boolean
-    onPlay: (playlist: Detail, index: number) => void
     onUnauthorized: () => void
   }
-  let { playlistId, active, currentId, playing, onPlay, onUnauthorized }: Props = $props()
+  let { playlistId, active, onUnauthorized }: Props = $props()
 
   const maxName = 100
 
@@ -86,7 +84,7 @@
 
 {#if playlistId !== null}
   {#key playlistId}
-    <PlaylistDetail id={playlistId} {active} {currentId} {playing} {onPlay} {onUnauthorized} />
+    <PlaylistDetail id={playlistId} {active} {onUnauthorized} />
   {/key}
 {:else}
   <section class="view" aria-labelledby="playlists-title">
@@ -126,15 +124,18 @@
     {:else if playlists.length === 0}
       <div class="state">
         <p>No playlists yet.</p>
-        <p class="rw-muted">Create one above, then add tracks from the Library with the <strong>+</strong> button.</p>
+        <p class="rw-muted">Create one above, then add tracks with “Add to playlist…” in any track's menu.</p>
       </div>
     {:else}
       <ul class="list" aria-label="Your playlists">
         {#each playlists as p (p.id)}
           <li>
             <a class="item" href={`#/playlists/${p.id}`}>
-              <span class="name">{p.name}</span>
-              <span class="meta">{summary(p)}</span>
+              <span class="art"><Artwork trackId={p.artwork_track_id} kind="list" /></span>
+              <span class="text">
+                <span class="name">{p.name}</span>
+                <span class="meta">{summary(p)}</span>
+              </span>
             </a>
           </li>
         {/each}
@@ -177,12 +178,25 @@
     list-style: none;
   }
 
-  .item {
+  .art {
+    flex: none;
+    width: 3rem;
+  }
+
+  .text {
     display: flex;
+    flex: 1;
     flex-wrap: wrap;
     align-items: baseline;
     justify-content: space-between;
     gap: var(--rw-space-1) var(--rw-space-4);
+    min-width: 0;
+  }
+
+  .item {
+    display: flex;
+    align-items: center;
+    gap: var(--rw-space-3);
     min-height: 3rem;
     padding: var(--rw-space-3);
     border-bottom: 1px solid var(--rw-color-surface);

@@ -14,6 +14,36 @@ The first public release. Nothing has been released yet.
 
 ### Added
 
+- **Listening experience:** a single playback engine shared by every page,
+  so navigation never interrupts playback; a play queue with play now, play
+  next, add to queue, reordering (drag and drop or buttons), removing,
+  clearing and saving as a playlist; shuffle, repeat off/all/one, volume,
+  mute, speed (0.5–2×), seeking by ±10 s and remaining time; recovery from
+  short network drops; the queue and settings are saved on the server and
+  restored after a refresh without autoplay. Mini player and Now Playing
+  screen with artwork, favorites, lyrics and track information.
+- **Albums and artists:** grids with search and sort; album pages with disc
+  grouping, missing-details notes and album editing; artist pages with
+  albums by year, appearances, all tracks, your top and recent tracks and
+  rename.
+- **Artwork:** read from embedded pictures or a cover image in the album
+  folder, validated, cached as small and large JPEGs in the data directory.
+- **Favorites and listening history:** favorite any track; plays count once
+  you have listened past a configurable threshold (exactly once per
+  playback); recently played tracks, albums and artists; most played; a
+  searchable history with date filters, bulk removal and a privacy mode.
+- **Metadata editor:** database-only edits of title, artists, album, track
+  and disc numbers, year, genre, composer and lyrics, which survive rescans
+  and can be reverted to the file's values; album-wide edits and artist
+  renames. Music files are never written.
+- **Playlists:** duplicate, add many tracks at once, choose artwork, shuffle,
+  add to the queue, drag-and-drop reordering.
+- **Keyboard shortcuts** (press `?`), a collapsible sidebar on tablets and
+  bottom navigation on phones.
+- Database migration `0006_listening` (additive). New endpoints under
+  `/api/albums`, `/api/artists`, `/api/favorites`, `/api/history`,
+  `/api/playback`, `/api/tracks/{id}/artwork`, `/api/tracks/{id}/metadata`.
+
 - **Server:** a single Go binary with the web interface built in, and a
   SQLite database. It is configured with environment variables, and listens
   on loopback only by default.

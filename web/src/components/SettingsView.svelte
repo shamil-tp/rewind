@@ -57,8 +57,12 @@
   // setting does not discard unsaved edits here.
   const savedSort = $derived(preferences.library_sort)
   const savedAutoplay = $derived(preferences.autoplay_next)
+  const savedThreshold = $derived(preferences.play_threshold_percent)
+  const savedRecord = $derived(preferences.record_history)
   let sort = $state<LibrarySortChoice>('artist')
   let autoplay = $state(true)
+  let threshold = $state(50)
+  let record = $state(true)
   let saving = $state(false)
   let error = $state('')
   let saved = $state('')
@@ -68,8 +72,14 @@
   $effect(() => {
     autoplay = savedAutoplay
   })
+  $effect(() => {
+    threshold = savedThreshold
+  })
+  $effect(() => {
+    record = savedRecord
+  })
 
-  const dirty = $derived(sort !== savedSort || autoplay !== savedAutoplay)
+  const dirty = $derived(sort !== savedSort || autoplay !== savedAutoplay || threshold !== savedThreshold || record !== savedRecord)
 
   async function saveForm(event: SubmitEvent) {
     event.preventDefault()
@@ -80,6 +90,8 @@
     const changes: Partial<Preferences> = {}
     if (sort !== savedSort) changes.library_sort = sort
     if (autoplay !== savedAutoplay) changes.autoplay_next = autoplay
+    if (threshold !== savedThreshold) changes.play_threshold_percent = threshold
+    if (record !== savedRecord) changes.record_history = record
     try {
       onSaved(await savePreferences(changes))
       saved = 'Settings saved.'
@@ -133,9 +145,30 @@
         <div class="check">
           <input id="pref-autoplay" type="checkbox" bind:checked={autoplay} disabled={status !== 'ready'} aria-describedby="pref-autoplay-hint" />
           <div>
-            <label class="rw-label" for="pref-autoplay">Continue playlists</label>
-            <p id="pref-autoplay-hint" class="rw-hint">When a playlist track ends, play the next available one.</p>
+            <label class="rw-label" for="pref-autoplay">Continue playing</label>
+            <p id="pref-autoplay-hint" class="rw-hint">When a track ends, play the next available one in the queue.</p>
           </div>
+        </div>
+
+        <div class="check">
+          <input id="pref-history" type="checkbox" bind:checked={record} disabled={status !== 'ready'} aria-describedby="pref-history-hint" />
+          <div>
+            <label class="rw-label" for="pref-history">Record listening history</label>
+            <p id="pref-history-hint" class="rw-hint">
+              Keeps the tracks you play, for History, play counts and top tracks. Turn off for a private mode: nothing new is recorded.
+              History is stored only on your server.
+            </p>
+          </div>
+        </div>
+
+        <div class="rw-field">
+          <label class="rw-label" for="pref-threshold">Count a play after</label>
+          <div class="threshold">
+            <input id="pref-threshold" type="range" min="10" max="100" step="5" bind:value={threshold} disabled={status !== 'ready' || !record}
+              aria-describedby="pref-threshold-hint" aria-valuetext={`${threshold}% of the track`} />
+            <output for="pref-threshold">{threshold}%</output>
+          </div>
+          <p id="pref-threshold-hint" class="rw-hint">How much of a track must be played before it counts (at most four minutes). Skipped tracks are not counted.</p>
         </div>
 
         <div class="actions">
@@ -186,6 +219,22 @@
     height: 1.5rem;
     margin: 0;
     accent-color: var(--rw-color-primary);
+  }
+
+  .threshold {
+    display: flex;
+    align-items: center;
+    gap: var(--rw-space-3);
+  }
+
+  .threshold input {
+    flex: 1;
+    accent-color: var(--rw-color-accent);
+  }
+
+  .threshold output {
+    min-width: 3rem;
+    font-family: var(--rw-font-mono);
   }
 
   .actions {

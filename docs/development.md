@@ -218,12 +218,17 @@ scripts/build.sh     production build
 
 | Route | View | API used |
 | --- | --- | --- |
-| `#/library` (default) | `LibraryView`: tracks, search, sort, paging; `+` opens `AddToPlaylist` | `GET /api/tracks`, `GET /api/playlists`, `POST /api/playlists/{id}/tracks` |
-| `#/playlists` | `PlaylistsView`: list, create | `GET /api/playlists`, `POST /api/playlists` |
-| `#/playlists/{id}` | `PlaylistDetail`: play, rename, delete, reorder, remove | `GET`, `PATCH`, `DELETE /api/playlists/{id}`, `PUT /api/playlists/{id}/tracks`, `DELETE /api/playlists/{id}/tracks/{trackId}` |
+| `#/library` (default) | `LibraryView`: tracks, search, sort, paging; favorite toggle and `TrackMenu` per row | `GET /api/tracks`, favorites, playlists |
+| `#/albums`, `#/artists` | `BrowseGrid`: album or artist grid with search and sort | `GET /api/albums`, `GET /api/artists` |
+| `#/albums/{id}` | `AlbumView`: play, shuffle, queue, add to playlist, album editor | `GET /api/albums/{id}`, `PATCH /api/albums/{id}/metadata` |
+| `#/artists/{id}` | `ArtistView`: albums by year, appears on, top and recent tracks, rename | `GET /api/artists/{id}`, `PATCH /api/artists/{id}/name` |
+| `#/playlists` | `PlaylistsView`: list with artwork, create | `GET /api/playlists`, `POST /api/playlists` |
+| `#/playlists/{id}` | `PlaylistDetail`: play, shuffle, queue, duplicate, artwork, edit, delete, reorder (drag and drop or ↑/↓), remove | `GET`, `PATCH`, `DELETE /api/playlists/{id}`, `PUT /api/playlists/{id}/tracks`, `POST .../duplicate`, `PUT .../artwork` |
+| `#/favorites` | `FavoritesView` | `GET /api/favorites/tracks` |
+| `#/history` | `HistoryView`: recent, most played, filtered history, bulk actions | `GET /api/history*`, `DELETE /api/history` |
+| (always) | `Player` (mini player and Now Playing), `QueuePanel`, `MetadataEditor`, `ShortcutsDialog`, all over the shared engine `services/player.svelte.ts` | `/api/playback`, `/api/history`, `/api/tracks/{id}/stream`, `/api/tracks/{id}/artwork`, `/api/tracks/{id}/metadata` |
 | `#/settings` | `SettingsView`: `ThemeSettings` (theme cards, preview, apply, enable/disable) and `ThemeEditor` (per-theme customization with `ThemePreview`), library and playback preferences, `PluginStatus` (read-only) | `GET /api/themes` (loaded by `Shell`), `PUT /api/themes/active`, `PUT /api/themes/{id}/enabled`, `PUT /api/themes/{id}/customization`, `PATCH /api/preferences` (loaded by `Shell` with `GET /api/preferences`), `GET /api/plugins` |
 | `#/status` | `StatusView`: overview, music folders, rescan | `GET /api/library`, `GET /api/library/roots`, `POST /api/library/scan` |
-| (always, once a track is chosen) | `Player`: the floating mini player, with previous/next while a playlist plays. Clicking or pulling up its track info opens the Now Playing screen, a modal view of the same `<audio>` element and state (Escape or the collapse button closes it; the rest of the page is `inert` meanwhile) | `GET /api/tracks/{id}/stream` (via `<audio>`), `HEAD` on errors |
 
 - Routing uses the URL hash, so the Go server's `index.html` fallback is not
   needed for these routes and reloading a route works in development and

@@ -3,27 +3,32 @@
   import {
     ApiError,
     deletePlaylist,
+    duplicatePlaylist,
     getPlaylist,
     removeFromPlaylist,
     reorderPlaylist,
+    setPlaylistArtwork,
     updatePlaylist,
     type PlaylistDetail,
     type PlaylistEntry,
   } from '../services/api'
   import { formatTime } from '../services/format'
-  import { nextPlayable } from '../services/sequence'
+  import { listening } from '../services/listening.svelte'
+  import { player } from '../services/player.svelte'
+  import { navigate } from '../services/ui.svelte'
   import { sentence } from '../services/validation'
+  import AddToPlaylist from './AddToPlaylist.svelte'
+  import Artwork from './Artwork.svelte'
+  import Icon from './Icon.svelte'
+  import TrackMenu from './TrackMenu.svelte'
 
   interface Props {
     id: number
     /** Whether the view is on screen; the playlist is reloaded when shown. */
     active: boolean
-    currentId: number | null
-    playing: boolean
-    onPlay: (playlist: PlaylistDetail, index: number) => void
     onUnauthorized: () => void
   }
-  let { id, active, currentId, playing, onPlay, onUnauthorized }: Props = $props()
+  let { id, active, onUnauthorized }: Props = $props()
 
   let detail = $state<PlaylistDetail | null>(null)
   let loadError = $state('')
@@ -35,6 +40,11 @@
   let editName = $state('')
   let editDescription = $state('')
   let confirmingDelete = $state(false)
+  let addingAll = $state(false)
+  let choosingArt = $state(false)
+  let menuFor = $state<number | null>(null)
+  let dragFrom = $state<number | null>(null)
+  let dropAt = $state<number | null>(null)
   let controller: AbortController | undefined
 
   /** Reports err: signs out on 401, shows "not found" on 404. Returns a message or ''. */
@@ -64,7 +74,9 @@
     }
   }
 
+  // Reload when shown, and after metadata edits elsewhere.
   $effect(() => {
+    void listening.libraryVersion
     if (active) untrack(() => void load())
   })
 
@@ -90,23 +102,49 @@
     }
   }
 
-  const firstPlayable = $derived(detail ? nextPlayable(detail.entries.map((e) => e.track), -1, 1) : -1)
+  const tracks = $derived(detail?.entries.map((e) => e.track) ?? [])
+  const playable = $derived(tracks.filter((t) => t.available))
+  const context = $derived(detail ? { kind: 'playlist' as const, id: String(detail.id), name: detail.name } : null)
 
+  /** Plays the playlist from this track (it becomes the queue). */
   function play(index: number) {
-    if (detail && detail.entries[index]?.track.available) onPlay(detail, index)
+    if (detail && tracks[index]?.available) player.playTracks(tracks, index, context)
+  }
+
+  /** Moves one entry to a new position; the whole order is saved in one request. */
+  function moveTo(from: number, to: number) {
+    const d = detail
+    if (!d || to < 0 || to >= d.entries.length || from === to) return
+    const ids = d.entries.map((e) => e.track.id)
+    const [moved] = ids.splice(from, 1)
+    ids.splice(to, 0, moved)
+    const title = d.entries[from].track.title
+    void act('Could not reorder the playlist.', async () => {
+      detail = await reorderPlaylist(id, ids)
+      notice = `Moved “${title}” to position ${to + 1}.`
+      await tick()
+      document.querySelector<HTMLElement>(`[data-entry="${to}"] .${to < from ? 'up' : 'down'}`)?.focus()
+    })
   }
 
   function move(index: number, by: -1 | 1) {
-    const d = detail
-    if (!d) return
-    const target = index + by
-    if (target < 0 || target >= d.entries.length) return
-    const ids = d.entries.map((e) => e.track.id)
-    ;[ids[index], ids[target]] = [ids[target], ids[index]]
-    const title = d.entries[index].track.title
-    void act('Could not reorder the playlist.', async () => {
-      detail = await reorderPlaylist(id, ids)
-      notice = `Moved “${title}” to position ${target + 1}.`
+    moveTo(index, index + by)
+  }
+
+  function duplicate() {
+    void act('Could not duplicate the playlist.', async () => {
+      const copy = await duplicatePlaylist(id)
+      listening.announce(`Created “${copy.name}”.`)
+      navigate(`#/playlists/${copy.id}`)
+    })
+  }
+
+  function chooseArtwork(trackId: number | null) {
+    void act('Could not change the artwork.', async () => {
+      const updated = await setPlaylistArtwork(id, trackId)
+      if (detail) detail = { ...detail, ...updated }
+      choosingArt = false
+      notice = trackId === null ? 'The artwork follows the first track again.' : 'Artwork changed.'
     })
   }
 
@@ -191,11 +229,46 @@
       <h1 id="playlist-title" class="view-title name" tabindex="-1">{detail.name}</h1>
       <p class="count">{meta}</p>
     </header>
-    {#if detail.description}<p class="description">{detail.description}</p>{/if}
+    <div class="hero">
+      <button class="cover" type="button" onclick={() => (choosingArt = !choosingArt)} aria-expanded={choosingArt}
+        aria-label="Change the playlist artwork" title="Change the artwork" disabled={detail.entries.length === 0}>
+        <Artwork trackId={detail.artwork_track_id} size="large" kind="list" />
+      </button>
+      {#if detail.description}<p class="description">{detail.description}</p>{/if}
+    </div>
+
+    {#if choosingArt}
+      <div class="art-choice" role="group" aria-label="Choose the artwork">
+        <p class="rw-hint">Use the artwork of one of this playlist's tracks.</p>
+        <ul class="art-grid">
+          {#each detail.entries.slice(0, 48) as e (e.track.id)}
+            <li>
+              <button type="button" class:chosen={detail.artwork_chosen && detail.artwork_track_id === e.track.id}
+                onclick={() => chooseArtwork(e.track.id)} aria-label={`Use the artwork of ${e.track.title}`} disabled={busy}>
+                <Artwork trackId={e.track.id} revision={e.track.revision} />
+              </button>
+            </li>
+          {/each}
+        </ul>
+        <div class="actions">
+          {#if detail.artwork_chosen}
+            <button class="rw-button rw-button-secondary" type="button" onclick={() => chooseArtwork(null)} disabled={busy}>Use the first track's</button>
+          {/if}
+          <button class="rw-button rw-button-secondary" type="button" onclick={() => (choosingArt = false)}>Close</button>
+        </div>
+      </div>
+    {/if}
 
     <div class="actions">
-      <button class="rw-button" type="button" onclick={() => play(firstPlayable)} disabled={firstPlayable < 0}>Play</button>
-      <button class="rw-button rw-button-secondary" type="button" onclick={startEdit} disabled={busy || editing}>Rename</button>
+      <button class="rw-button" type="button" onclick={() => play(tracks.findIndex((t) => t.available))} disabled={playable.length === 0}>Play</button>
+      <button class="rw-button rw-button-secondary" type="button" disabled={playable.length === 0}
+        onclick={() => player.playTracks(tracks, -1, context, { shuffle: true })}>Shuffle</button>
+      <button class="rw-button rw-button-secondary" type="button" disabled={playable.length === 0} onclick={() => player.playNext(playable)}>Play next</button>
+      <button class="rw-button rw-button-secondary" type="button" disabled={playable.length === 0} onclick={() => player.addToQueue(playable)}>Add to queue</button>
+      <button class="rw-button rw-button-secondary" type="button" aria-expanded={addingAll} disabled={tracks.length === 0}
+        onclick={() => (addingAll = !addingAll)}>Add to another playlist…</button>
+      <button class="rw-button rw-button-secondary" type="button" onclick={duplicate} disabled={busy}>Duplicate</button>
+      <button class="rw-button rw-button-secondary" type="button" onclick={startEdit} disabled={busy || editing}>Edit</button>
       <button
         class="rw-button rw-button-secondary"
         type="button"
@@ -206,6 +279,17 @@
         disabled={busy || confirmingDelete}>Delete</button
       >
     </div>
+
+    {#if addingAll && tracks.length > 0}
+      <div class="edit">
+        <AddToPlaylist track={tracks[0]} {tracks} name={detail.name} exclude={detail.id}
+          onDone={(m) => {
+            listening.announce(m)
+            addingAll = false
+          }}
+          onCancel={() => (addingAll = false)} {onUnauthorized} />
+      </div>
+    {/if}
 
     {#if editing}
       <form class="edit" onsubmit={saveEdit}>
@@ -244,13 +328,38 @@
     {#if detail.entries.length === 0}
       <div class="state">
         <p>This playlist is empty.</p>
-        <p class="rw-muted">Add tracks from the <a href="#/library">Library</a> with the <strong>+</strong> button.</p>
+        <p class="rw-muted">Add tracks from the <a href="#/library">Library</a>, an album or an artist with “Add to playlist…” in a track's menu.</p>
       </div>
     {:else}
+      <p class="rw-hint">Drag tracks to reorder them, or use the ↑ and ↓ buttons.</p>
       <ol class="entries" aria-label="Tracks" aria-busy={busy}>
         {#each detail.entries as entry, i (entry.track.id)}
-          {@const isCurrent = entry.track.id === currentId}
-          <li class="entry" class:current={isCurrent}>
+          {@const isCurrent = player.isCurrentTrack(entry.track.id)}
+          <li
+            class="entry"
+            class:current={isCurrent}
+            class:drop={dropAt === i}
+            data-entry={i}
+            draggable={!busy}
+            ondragstart={(ev) => {
+              dragFrom = i
+              ev.dataTransfer?.setData('text/plain', String(i))
+            }}
+            ondragover={(ev) => {
+              ev.preventDefault()
+              dropAt = i
+            }}
+            ondrop={(ev) => {
+              ev.preventDefault()
+              if (dragFrom !== null) moveTo(dragFrom, i)
+              dragFrom = dropAt = null
+            }}
+            ondragend={() => (dragFrom = dropAt = null)}
+            oncontextmenu={(ev) => {
+              ev.preventDefault()
+              menuFor = i
+            }}
+          >
             <span class="pos" aria-hidden="true">{entry.position}</span>
             <button
               class="row"
@@ -260,27 +369,38 @@
               aria-current={isCurrent ? 'true' : undefined}
               aria-label={entryLabel(entry)}
             >
-              <span class="title">
-                {#if isCurrent}<span class="marker">{playing ? 'Playing' : 'Paused'}</span>{/if}
-                <span class="title-text">{entry.track.title}</span>
+              <span class="thumb"><Artwork trackId={entry.track.id} revision={entry.track.revision} /></span>
+              <span class="text">
+                <span class="title">
+                  {#if isCurrent}<span class="marker">{player.playing ? 'Playing' : 'Paused'}</span>{/if}
+                  <span class="title-text" title={entry.track.title}>{entry.track.title}</span>
+                </span>
+                <span class="artist">{entry.track.artist ?? '—'}</span>
               </span>
-              <span class="artist">{entry.track.artist ?? '—'}</span>
             </button>
             <span class="len">
-              {#if !entry.track.available}<span class="badge">Unavailable</span>{/if}
+              {#if entry.track.status === 'missing'}<span class="badge">File missing</span>
+              {:else if !entry.track.available}<span class="badge">Unavailable</span>{/if}
               {formatTime(entry.track.duration_ms ? entry.track.duration_ms / 1000 : undefined)}
             </span>
             <span class="tools">
-              <button type="button" onclick={() => move(i, -1)} disabled={busy || i === 0} aria-label={`Move ${entry.track.title} up`}>↑</button>
+              <button class="up" type="button" onclick={() => move(i, -1)} disabled={busy || i === 0} aria-label={`Move ${entry.track.title} up`}
+                ><Icon name="up" /></button
+              >
               <button
+                class="down"
                 type="button"
                 onclick={() => move(i, 1)}
                 disabled={busy || i === detail.entries.length - 1}
-                aria-label={`Move ${entry.track.title} down`}>↓</button
+                aria-label={`Move ${entry.track.title} down`}><Icon name="down" /></button
               >
-              <button type="button" onclick={() => remove(entry)} disabled={busy} aria-label={`Remove ${entry.track.title} from the playlist`}
-                >✕</button
-              >
+              <TrackMenu
+                track={entry.track}
+                {context}
+                {onUnauthorized}
+                extra={[{ label: 'Remove from playlist', danger: true, onSelect: () => remove(entry) }]}
+                bind:open={() => menuFor === i, (v) => (menuFor = v ? i : menuFor === i ? null : menuFor)}
+              />
             </span>
           </li>
         {/each}
@@ -301,9 +421,8 @@
   }
 
   .description {
+    flex: 1 1 16rem;
     max-width: 40rem;
-    margin-top: calc(-1 * var(--rw-space-3));
-    margin-bottom: var(--rw-space-4);
     color: var(--rw-color-muted);
     white-space: pre-line;
     overflow-wrap: anywhere;
@@ -374,6 +493,11 @@
     border-radius: var(--rw-radius-sm);
   }
 
+  .entry.drop {
+    border-color: var(--rw-color-primary);
+    border-top: var(--rw-border-width) solid var(--rw-color-primary);
+  }
+
   .entry.current {
     border-left-color: var(--rw-color-accent);
     background: var(--rw-color-surface);
@@ -387,8 +511,68 @@
     font-variant-numeric: tabular-nums;
   }
 
-  .row {
+  .hero {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-end;
+    gap: var(--rw-space-4);
+    margin-bottom: var(--rw-space-4);
+  }
+
+  .cover {
+    width: 9rem;
+    padding: 0;
+    border: 0;
+    border-radius: var(--rw-radius-sm);
+    background: transparent;
+    cursor: pointer;
+  }
+
+  .art-choice {
     display: grid;
+    gap: var(--rw-space-2);
+    margin-bottom: var(--rw-space-4);
+    padding: var(--rw-space-3);
+    border: var(--rw-border);
+    border-radius: var(--rw-radius-lg);
+  }
+
+  .art-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(3.5rem, 1fr));
+    gap: var(--rw-space-2);
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .art-grid button {
+    width: 100%;
+    padding: 2px;
+    border: var(--rw-border-width) solid transparent;
+    border-radius: var(--rw-radius-sm);
+    background: transparent;
+    cursor: pointer;
+  }
+
+  .art-grid button.chosen {
+    border-color: var(--rw-color-accent);
+  }
+
+  .thumb {
+    flex: none;
+    width: 2.5rem;
+  }
+
+  .text {
+    display: grid;
+    min-width: 0;
+  }
+
+  .row {
+    display: flex;
+    align-items: center;
+    gap: var(--rw-space-3);
     min-width: 0;
     min-height: 3rem;
     padding: var(--rw-space-2) 0;
@@ -457,6 +641,7 @@
 
   .tools {
     display: flex;
+    align-items: center;
   }
 
   /* 44px touch targets. */

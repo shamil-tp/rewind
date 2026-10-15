@@ -476,6 +476,7 @@ type indexed struct {
 	status         string
 	metadataStatus string
 	durationMS     sql.NullInt64
+	version        int // metadata.Version of the extractor that read it
 }
 
 type job struct {
@@ -578,8 +579,8 @@ func (r *scanRun) execute(ctx context.Context) (status, summary, rootStatus, roo
 }
 
 func (r *scanRun) loadIndex(ctx context.Context) (map[string]*indexed, error) {
-	rows, err := r.s.db.QueryContext(ctx, `SELECT id, rel_path, file_size, file_mtime_ns, status, metadata_status, duration_ms
-		FROM tracks WHERE root_id = ?`, r.root.ID)
+	rows, err := r.s.db.QueryContext(ctx, `SELECT id, rel_path, file_size, file_mtime_ns, status, metadata_status, duration_ms,
+		metadata_version FROM tracks WHERE root_id = ?`, r.root.ID)
 	if err != nil {
 		return nil, err
 	}
@@ -588,7 +589,7 @@ func (r *scanRun) loadIndex(ctx context.Context) (map[string]*indexed, error) {
 	for rows.Next() {
 		var rel string
 		t := &indexed{}
-		if err := rows.Scan(&t.id, &rel, &t.size, &t.mtime, &t.status, &t.metadataStatus, &t.durationMS); err != nil {
+		if err := rows.Scan(&t.id, &rel, &t.size, &t.mtime, &t.status, &t.metadataStatus, &t.durationMS, &t.version); err != nil {
 			return nil, err
 		}
 		idx[rel] = t
@@ -777,7 +778,10 @@ func (r *scanRun) walk(ctx context.Context, jobs chan<- job) {
 		r.seen[rel] = struct{}{}
 		size, mtime := info.Size(), info.ModTime().UnixNano()
 		old := r.index[rel]
-		if old != nil && old.size == size && old.mtime == mtime && old.metadataStatus != string(metadata.StatusError) {
+		// Files read by an older extractor are read again once, so new
+		// fields (such as composer and lyrics) are filled in.
+		if old != nil && old.size == size && old.mtime == mtime && old.metadataStatus != string(metadata.StatusError) &&
+			old.version >= metadata.Version {
 			if old.status == "present" {
 				r.p.unchanged.Add(1)
 				return nil
@@ -838,7 +842,11 @@ func (r *scanRun) write(ctx context.Context, outcomes <-chan outcome) error {
 }
 
 const trackColumns = `rel_path, file_size, file_mtime_ns, format, codec, title, artist, album, album_artist,
-	genre, release_date, year, track_number, disc_number, duration_ms, metadata_status, metadata_error`
+	genre, release_date, year, track_number, disc_number, duration_ms, metadata_status, metadata_error,
+	composer, lyrics, metadata_version`
+
+// trackColumnCount is the number of columns in trackColumns.
+const trackColumnCount = 20
 
 func (r *scanRun) commit(ctx context.Context, batch []outcome) error {
 	now := r.s.now().Unix()
@@ -865,12 +873,17 @@ func (r *scanRun) commit(ctx context.Context, batch []outcome) error {
 		}
 		vals := []any{o.rel, o.size, o.mtime, m.Format, nullIfEmpty(m.Codec), m.Title, nullIfEmpty(m.Artist),
 			nullIfEmpty(m.Album), nullIfEmpty(m.AlbumArtist), nullIfEmpty(m.Genre), nullIfEmpty(m.Date),
-			m.Year, m.TrackNumber, m.DiscNumber, m.DurationMS, string(m.Status), nullIfEmpty(m.Error)}
+			m.Year, m.TrackNumber, m.DiscNumber, m.DurationMS, string(m.Status), nullIfEmpty(m.Error),
+			nullIfEmpty(m.Composer), nullIfEmpty(m.Lyrics), metadata.Version}
 		if o.old != nil {
-			_, err := tx.ExecContext(ctx, `UPDATE tracks SET (`+trackColumns+`, status, missing_since, updated_at)
-				= (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'present', NULL, ?) WHERE id = ?`,
+			_, err := tx.ExecContext(ctx, `UPDATE tracks SET (`+trackColumns+`, status, missing_since, updated_at, revision)
+				= (`+placeholders(trackColumnCount)+`, 'present', NULL, ?, revision + 1) WHERE id = ?`,
 				append(vals, now, o.old.id)...)
 			if err != nil {
+				return err
+			}
+			// Metadata edits made in Rewind win over the file's tags.
+			if err := ReapplyEdits(ctx, tx, o.old.id, now); err != nil {
 				return err
 			}
 			counts.updated++
@@ -881,7 +894,7 @@ func (r *scanRun) commit(ctx context.Context, batch []outcome) error {
 		}
 		var id int64
 		err := tx.QueryRowContext(ctx, `INSERT INTO tracks (root_id, `+trackColumns+`, status, first_seen_at, updated_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'present', ?, ?) RETURNING id`,
+			VALUES (?, `+placeholders(trackColumnCount)+`, 'present', ?, ?) RETURNING id`,
 			append(append([]any{r.root.ID}, vals...), now, now)...).Scan(&id)
 		if err != nil {
 			return err
@@ -979,8 +992,12 @@ func (r *scanRun) reconcile(ctx context.Context) error {
 // during the scan, so it may already be in a playlist: those entries move to
 // the old ID, keeping their positions. Where a playlist already holds the old
 // ID, the duplicate entry is removed with the new row (foreign-key cascade).
+//
+// Favorites and listening history recorded for the new row move to the old
+// ID as well, and metadata edits of the old row are applied again on top of
+// the file's tags.
 func mergeRename(ctx context.Context, tx *sql.Tx, oldID, newID, now int64) error {
-	vals := make([]any, 17)
+	vals := make([]any, trackColumnCount)
 	ptrs := make([]any, len(vals))
 	for i := range vals {
 		ptrs[i] = &vals[i]
@@ -988,17 +1005,29 @@ func mergeRename(ctx context.Context, tx *sql.Tx, oldID, newID, now int64) error
 	if err := tx.QueryRowContext(ctx, "SELECT "+trackColumns+" FROM tracks WHERE id = ?", newID).Scan(ptrs...); err != nil {
 		return err
 	}
-	if _, err := tx.ExecContext(ctx,
-		"UPDATE OR IGNORE playlist_tracks SET track_id = ? WHERE track_id = ?", oldID, newID); err != nil {
-		return err
+	for _, q := range []string{
+		"UPDATE OR IGNORE playlist_tracks SET track_id = ? WHERE track_id = ?",
+		"UPDATE OR IGNORE favorites SET track_id = ? WHERE track_id = ?",
+		"UPDATE play_history SET track_id = ? WHERE track_id = ?",
+	} {
+		if _, err := tx.ExecContext(ctx, q, oldID, newID); err != nil {
+			return err
+		}
 	}
 	if _, err := tx.ExecContext(ctx, "DELETE FROM tracks WHERE id = ?", newID); err != nil {
 		return err
 	}
-	_, err := tx.ExecContext(ctx, `UPDATE tracks SET (`+trackColumns+`, status, missing_since, updated_at)
-		= (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'present', NULL, ?) WHERE id = ?`,
-		append(vals, now, oldID)...)
-	return err
+	if _, err := tx.ExecContext(ctx, `UPDATE tracks SET (`+trackColumns+`, status, missing_since, updated_at, revision)
+		= (`+placeholders(trackColumnCount)+`, 'present', NULL, ?, revision + 1) WHERE id = ?`,
+		append(vals, now, oldID)...); err != nil {
+		return err
+	}
+	return ReapplyEdits(ctx, tx, oldID, now)
+}
+
+// placeholders returns n comma-separated "?".
+func placeholders(n int) string {
+	return strings.TrimSuffix(strings.Repeat("?, ", n), ", ")
 }
 
 func (r *scanRun) logFileError(rel, msg string) {

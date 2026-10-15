@@ -249,3 +249,12 @@ func Tag(t testing.TB, path string, tags map[string][]string) {
 		t.Fatalf("testaudio: tagging %s: %v", path, err)
 	}
 }
+
+// Image embeds a cover image into a generated test file using TagLib. Test
+// setup only; Rewind never writes images into music files.
+func Image(t testing.TB, path string, img []byte) {
+	t.Helper()
+	if err := taglib.WriteImage(path, img); err != nil {
+		t.Fatalf("testaudio: embedding image in %s: %v", path, err)
+	}
+}

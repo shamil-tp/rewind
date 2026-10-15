@@ -21,8 +21,16 @@ service and no telemetry.
   seeking (HTTP Range), from a floating mini player that opens a full Now
   Playing screen. The browser plays the original files; nothing is
   transcoded.
-- **Playlists**, played in order with previous and next. Preferences are
-  saved per account.
+- **Listening:** one persistent player across every page with a play queue
+  (play now, play next, add to queue, drag to reorder), shuffle, repeat,
+  volume and speed; the queue is restored after a refresh. Album and artist
+  pages, artwork from your files, favorites, listening history with play
+  counts, and keyboard shortcuts. Works on phones, tablets and desktops.
+- **Playlists:** create, edit, reorder (drag and drop or buttons),
+  duplicate, choose artwork, play or shuffle, add to the queue.
+- **Metadata editor:** fix titles, artists, albums, numbers, years, genres,
+  composers and lyrics. Edits are stored in Rewind's database; your music
+  files are never modified.
 - **Themes and style:** Rewind Dark (rounded neo-brutalist, the default),
   Rewind Light and Rewind OLED. Customize colors, fonts, borders, corner
   radii, shadows and spacing per theme with a live preview and contrast

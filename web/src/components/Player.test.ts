@@ -1,22 +1,17 @@
 import { fireEvent, render, screen, within } from '@testing-library/svelte'
-import { describe, expect, it, vi } from 'vitest'
+import { tick } from 'svelte'
+import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vitest'
 import type { Track } from '../services/api'
-import { mockFetch } from '../test/fetch'
+import { listening } from '../services/listening.svelte'
+import { player } from '../services/player.svelte'
+import { ui } from '../services/ui.svelte'
+import { json, mockFetch } from '../test/fetch'
 import Player from './Player.svelte'
 
 function track(id: number, extra: Partial<Track> = {}): Track {
   return {
-    id,
-    root_id: 1,
-    title: `Song ${id}`,
-    artist: 'Band',
-    album: 'Record',
-    duration_ms: 200_000,
-    format: 'flac',
-    status: 'present',
-    available: true,
-    metadata_status: 'ok',
-    ...extra,
+    id, root_id: 1, title: `Song ${id}`, artist: 'Band', album: 'Record', duration_ms: 200_000, format: 'flac',
+    status: 'present', available: true, metadata_status: 'ok', artists: [{ id: btoa('band'), name: 'Band' }], ...extra,
   }
 }
 
@@ -35,363 +30,220 @@ function stubMedia(playResult?: () => Promise<void>) {
   return { play, pause, load }
 }
 
+const audio = () => document.querySelector<HTMLAudioElement>('audio[data-rewind-player]')!
+
 /** Makes currentTime/duration controllable on a jsdom media element. */
-function controllable(audio: HTMLAudioElement) {
+function controllable(a: HTMLAudioElement) {
   const state = { currentTime: 0, duration: NaN }
-  Object.defineProperty(audio, 'currentTime', {
-    configurable: true,
-    get: () => state.currentTime,
-    set: (v: number) => {
-      state.currentTime = v
-    },
-  })
-  Object.defineProperty(audio, 'duration', { configurable: true, get: () => state.duration })
+  Object.defineProperty(a, 'currentTime', { configurable: true, get: () => state.currentTime, set: (v: number) => (state.currentTime = v) })
+  Object.defineProperty(a, 'duration', { configurable: true, get: () => state.duration })
+  Object.defineProperty(a, 'readyState', { configurable: true, get: () => 4 })
   return state
 }
 
-function audioOf(container: HTMLElement): HTMLAudioElement {
-  const els = container.querySelectorAll('audio')
-  expect(els.length).toBe(1)
-  return els[0]
+function failWith(code: number) {
+  Object.defineProperty(audio(), 'error', { configurable: true, value: { code, MEDIA_ERR_ABORTED: 1 } })
+  audio().dispatchEvent(new Event('error'))
 }
 
-function failWith(audio: HTMLAudioElement, code: number) {
-  Object.defineProperty(audio, 'error', { configurable: true, value: { code, MEDIA_ERR_ABORTED: 1 } })
-  audio.dispatchEvent(new Event('error'))
+let onUnauthorized: Mock<() => void>
+let media: ReturnType<typeof stubMedia>
+beforeEach(() => {
+  media = stubMedia()
+  onUnauthorized = vi.fn<() => void>()
+  player.attach(onUnauthorized)
+  mockFetch({ 'PUT /api/playback': () => json(200, {}) })
+})
+afterEach(() => {
+  player.detach()
+  ui.nowPlayingOpen = ui.queueOpen = false
+})
+
+async function start(tracks: Track[] = [track(1), track(2), track(3)], index = 0) {
+  render(Player, { props: { onUnauthorized } })
+  player.playTracks(tracks, index, { kind: 'album', id: 'x', name: 'Record' })
+  await tick()
 }
 
-describe('Player', () => {
-  it('stays mounted but hidden without a track', () => {
-    stubMedia()
-    const { container } = render(Player, { props: { track: null, onUnauthorized: vi.fn() } })
-    const bar = container.querySelector('section.playbar') as HTMLElement
-    expect(bar.hidden).toBe(true)
-    audioOf(container) // the single audio element exists already
-    expect(screen.queryByRole('button', { name: 'Play' })).toBeNull()
+describe('Player: mini player', () => {
+  it('stays hidden without a track and never owns audio itself', () => {
+    const { container } = render(Player, { props: { onUnauthorized } })
+    expect((container.querySelector('section.playbar') as HTMLElement).hidden).toBe(true)
+    expect(container.querySelector('audio')).toBeNull()
+    expect(document.querySelectorAll('audio[data-rewind-player]')).toHaveLength(1)
   })
 
-  it('reports play state changes to the parent', async () => {
-    stubMedia()
-    const onPlayingChange = vi.fn()
-    render(Player, { props: { track: track(1), onUnauthorized: vi.fn(), onPlayingChange } })
-    await vi.waitFor(() => expect(onPlayingChange).toHaveBeenLastCalledWith(true))
-    await fireEvent.click(screen.getByRole('button', { name: 'Pause' }))
-    expect(onPlayingChange).toHaveBeenLastCalledWith(false)
-  })
-
-  it('selecting a track sets the stream URL and starts playback', async () => {
-    const media = stubMedia()
-    const { container } = render(Player, { props: { track: track(7), onUnauthorized: vi.fn() } })
-    const audio = audioOf(container)
-    expect(audio.getAttribute('src')).toBe('/api/tracks/7/stream')
-    expect(media.load).toHaveBeenCalled()
-    expect(media.play).toHaveBeenCalled()
-    expect(screen.getByText('Song 7')).toBeTruthy()
-    expect(screen.getByText('Band · Record')).toBeTruthy()
-    expect(await screen.findByRole('button', { name: 'Pause' })).toBeTruthy()
-  })
-
-  it('play and pause controls drive the audio element', async () => {
-    const media = stubMedia()
-    render(Player, { props: { track: track(1), onUnauthorized: vi.fn() } })
-    await fireEvent.click(await screen.findByRole('button', { name: 'Pause' }))
+  it('shows the track with artwork, and drives play, pause, previous and next', async () => {
+    await start()
+    const bar = await screen.findByRole('region', { name: 'Player' })
+    expect(within(bar).getByText('Song 1')).toBeTruthy()
+    expect(within(bar).getByText('Band · Record')).toBeTruthy()
+    expect(bar.querySelector('img')?.getAttribute('src')).toBe('/api/tracks/1/artwork?size=small')
+    expect(audio().getAttribute('src')).toBe('/api/tracks/1/stream')
+    await fireEvent.click(within(bar).getByRole('button', { name: 'Pause' }))
     expect(media.pause).toHaveBeenCalled()
-    await fireEvent.click(await screen.findByRole('button', { name: 'Play' }))
-    expect(media.play).toHaveBeenCalledTimes(2)
-    expect(await screen.findByRole('button', { name: 'Pause' })).toBeTruthy()
+    await fireEvent.click(within(bar).getByRole('button', { name: 'Play' }))
+    await fireEvent.click(within(bar).getByRole('button', { name: 'Next track' }))
+    expect(within(bar).getByText('Song 2')).toBeTruthy()
+    expect(audio().getAttribute('src')).toBe('/api/tracks/2/stream')
+    await fireEvent.click(within(bar).getByRole('button', { name: 'Previous track' }))
+    expect(within(bar).getByText('Song 1')).toBeTruthy()
   })
 
-  it('shows current time and duration from the element', async () => {
-    stubMedia()
-    const { container } = render(Player, { props: { track: track(1, { duration_ms: undefined }), onUnauthorized: vi.fn() } })
-    const audio = audioOf(container)
-    const state = controllable(audio)
-    expect(screen.getByLabelText('Duration').textContent).toBe('--:--')
+  it('shows time and duration, and seeks', async () => {
+    await start([track(1)])
+    const state = controllable(audio())
+    expect(screen.getAllByLabelText('Duration')[0].textContent).toBe('3:20') // indexed duration first
     state.duration = 245
-    await fireEvent(audio, new Event('durationchange'))
-    state.currentTime = 62.4
-    await fireEvent(audio, new Event('timeupdate'))
-    expect(screen.getByLabelText('Duration').textContent).toBe('4:05')
-    expect(screen.getByLabelText('Elapsed time').textContent).toBe('1:02')
-    expect(screen.getByLabelText('Seek').getAttribute('aria-valuetext')).toBe('1:02 of 4:05')
+    audio().dispatchEvent(new Event('durationchange'))
+    state.currentTime = 61
+    audio().dispatchEvent(new Event('timeupdate'))
+    await vi.waitFor(() => expect(screen.getAllByLabelText('Elapsed time')[0].textContent).toBe('1:01'))
+    expect(screen.getAllByLabelText('Duration')[0].textContent).toBe('4:05')
+    await fireEvent.input(screen.getAllByRole('slider', { name: 'Seek' })[0], { target: { value: '120' } })
+    expect(state.currentTime).toBe(120)
   })
 
-  it('uses the indexed duration until the element reports one', () => {
-    stubMedia()
-    render(Player, { props: { track: track(1, { duration_ms: 3_725_000 }), onUnauthorized: vi.fn() } })
-    expect(screen.getByLabelText('Duration').textContent).toBe('1:02:05')
-  })
-
-  it('seeking sets the playback position', async () => {
-    stubMedia()
-    const { container } = render(Player, { props: { track: track(1), onUnauthorized: vi.fn() } })
-    const state = controllable(audioOf(container))
-    await fireEvent.input(screen.getByLabelText('Seek'), { target: { value: '150' } })
-    expect(state.currentTime).toBe(150)
-    expect(screen.getByLabelText('Elapsed time').textContent).toBe('2:30')
-  })
-
-  it('shows loading while buffering', async () => {
-    stubMedia(() => new Promise(() => {})) // play() never settles
-    const { container } = render(Player, { props: { track: track(1), onUnauthorized: vi.fn() } })
-    const audio = audioOf(container)
-    await fireEvent(audio, new Event('loadstart'))
-    expect(screen.getByRole('status').textContent).toContain('Loading')
-    await fireEvent(audio, new Event('canplay'))
-    expect(screen.getByRole('status').textContent).not.toContain('Loading')
-    await fireEvent(audio, new Event('waiting'))
-    expect(screen.getByRole('status').textContent).toContain('Loading')
-  })
-
-  it('asks the user to press play when autoplay is blocked', async () => {
-    stubMedia(() => Promise.reject(new DOMException('blocked', 'NotAllowedError')))
-    render(Player, { props: { track: track(1), onUnauthorized: vi.fn() } })
+  it('shows loading while buffering, and a notice when autoplay is blocked', async () => {
+    media.play.mockImplementation(() => Promise.reject(new DOMException('blocked', 'NotAllowedError')))
+    await start([track(1)])
     expect(await screen.findByText('Press play to start.')).toBeTruthy()
+    audio().dispatchEvent(new Event('waiting'))
+    expect(await screen.findByText('Loading…')).toBeTruthy()
+    expect(screen.getByRole('region', { name: 'Player' }).getAttribute('aria-busy')).toBe('true')
   })
 
-  it.each([
-    [404, "This track's file was not found"],
-    [503, 'The library drive is not available'],
-    [409, 'no longer configured'],
-    [200, 'This browser cannot play FLAC (flac) files.'],
-  ])('explains a playback error when the stream answers %i', async (status, message) => {
-    stubMedia()
-    const fetch = mockFetch({ 'HEAD /api/tracks/3/stream': () => new Response(null, { status }) })
-    const { container } = render(Player, { props: { track: track(3, { codec: 'flac' }), onUnauthorized: vi.fn() } })
-    failWith(audioOf(container), 4)
-    expect((await screen.findByRole('alert')).textContent).toContain(message)
-    expect(fetch).toHaveBeenCalledTimes(1)
-    expect((screen.getByRole('button', { name: 'Play' }) as HTMLButtonElement).disabled).toBe(true)
-  })
+  for (const [status, message] of [
+    [404, /file was not found/],
+    [409, /no longer configured/],
+    [503, /drive is not available/],
+    [200, /cannot play FLAC files/],
+  ] as const) {
+    it(`explains a playback error when the stream answers ${status}`, async () => {
+      mockFetch({ 'PUT /api/playback': () => json(200, {}), 'HEAD /api/tracks/1/stream': () => new Response(null, { status }) })
+      await start([track(1)])
+      failWith(4)
+      expect((await screen.findByRole('alert')).textContent).toMatch(message)
+    })
+  }
 
   it('reports an expired session', async () => {
-    stubMedia()
-    mockFetch({ 'HEAD /api/tracks/3/stream': () => new Response(null, { status: 401 }) })
-    const onUnauthorized = vi.fn()
-    const { container } = render(Player, { props: { track: track(3), onUnauthorized } })
-    failWith(audioOf(container), 2)
-    expect((await screen.findByRole('alert')).textContent).toContain('session has expired')
-    expect(onUnauthorized).toHaveBeenCalled()
+    mockFetch({ 'PUT /api/playback': () => json(200, {}), 'HEAD /api/tracks/1/stream': () => new Response(null, { status: 401 }) })
+    await start([track(1)])
+    failWith(2)
+    await vi.waitFor(() => expect(onUnauthorized).toHaveBeenCalled())
   })
 
-  it('reports an unreachable server', async () => {
-    stubMedia()
-    mockFetch({
-      'HEAD /api/tracks/3/stream': () => {
-        throw new TypeError('Failed to fetch')
-      },
-    })
-    const { container } = render(Player, { props: { track: track(3), onUnauthorized: vi.fn() } })
-    failWith(audioOf(container), 2)
-    expect((await screen.findByRole('alert')).textContent).toContain('Cannot reach the Rewind server')
+  it('retries when the server is unreachable', async () => {
+    mockFetch({ 'PUT /api/playback': () => json(200, {}), 'HEAD /api/tracks/1/stream': () => Promise.reject(new TypeError('offline')) })
+    await start([track(1)])
+    failWith(2)
+    expect(await screen.findByText('Connection lost. Retrying…')).toBeTruthy()
+    media.load.mockClear()
+    window.dispatchEvent(new Event('online'))
+    expect(media.load).toHaveBeenCalled()
+    expect(audio().getAttribute('src')).toBe('/api/tracks/1/stream')
   })
 
   it('ignores aborted loads', async () => {
-    stubMedia()
-    const fetch = mockFetch({})
-    const { container } = render(Player, { props: { track: track(3), onUnauthorized: vi.fn() } })
-    failWith(audioOf(container), 1) // MEDIA_ERR_ABORTED
+    await start([track(1)])
+    failWith(1)
     await new Promise((r) => setTimeout(r, 0))
     expect(screen.queryByRole('alert')).toBeNull()
-    expect(fetch).not.toHaveBeenCalled()
   })
 
-  it('selecting another track replaces the source on the same element', async () => {
-    const media = stubMedia()
-    const { container, rerender } = render(Player, { props: { track: track(1), onUnauthorized: vi.fn() } })
-    const audio = audioOf(container)
-    await rerender({ track: track(2), onUnauthorized: vi.fn() })
-    expect(audioOf(container)).toBe(audio)
-    expect(audio.getAttribute('src')).toBe('/api/tracks/2/stream')
-    expect(screen.getByText('Song 2')).toBeTruthy()
-    expect(media.load).toHaveBeenCalledTimes(2)
-  })
+  it('toggles favorite, shuffle, repeat and mute, showing the state in text and pressed buttons', async () => {
+    mockFetch({ 'PUT /api/playback': () => json(200, {}), 'PUT /api/favorites/tracks/1': () => json(200, {}) })
+    await start()
+    const bar = screen.getByRole('region', { name: 'Player' })
+    const fav = within(bar).getByRole('button', { name: 'Favorite: Song 1' })
+    await fireEvent.click(fav)
+    await vi.waitFor(() => expect(fav.getAttribute('aria-pressed')).toBe('true'))
+    expect(listening.isFavorite(track(1))).toBe(true)
 
-  it('clears an error when another track is selected', async () => {
-    stubMedia()
-    mockFetch({ 'HEAD /api/tracks/3/stream': () => new Response(null, { status: 404 }) })
-    const { container, rerender } = render(Player, { props: { track: track(3), onUnauthorized: vi.fn() } })
-    failWith(audioOf(container), 4)
-    await screen.findByRole('alert')
-    await rerender({ track: track(4), onUnauthorized: vi.fn() })
-    expect(screen.queryByRole('alert')).toBeNull()
-  })
+    await fireEvent.click(within(bar).getByRole('button', { name: 'Shuffle' }))
+    expect(within(bar).getByRole('button', { name: 'Shuffle' }).getAttribute('aria-pressed')).toBe('true')
+    await fireEvent.click(within(bar).getByRole('button', { name: 'Repeat: off' }))
+    expect(within(bar).getByRole('button', { name: 'Repeat: all' })).toBeTruthy()
+    await fireEvent.click(within(bar).getByRole('button', { name: 'Mute' }))
+    expect(audio().muted).toBe(true)
+    await fireEvent.input(within(bar).getByRole('slider', { name: 'Volume' }), { target: { value: '0.4' } })
+    expect(audio().volume).toBeCloseTo(0.4)
+    expect(audio().muted).toBe(false)
 
-  it('releases the media when the track is cleared', async () => {
-    const media = stubMedia()
-    const { container, rerender } = render(Player, { props: { track: track(1), onUnauthorized: vi.fn() } })
-    await rerender({ track: null, onUnauthorized: vi.fn() })
-    expect(audioOf(container).hasAttribute('src')).toBe(false)
-    expect(media.pause).toHaveBeenCalled()
-    expect((container.querySelector('section.playbar') as HTMLElement).hidden).toBe(true)
-  })
-
-  it('shows no previous/next controls outside a playlist', () => {
-    stubMedia()
-    render(Player, { props: { track: track(1), onUnauthorized: vi.fn() } })
-    expect(screen.queryByRole('button', { name: 'Next track' })).toBeNull()
-    expect(screen.queryByRole('button', { name: 'Previous track' })).toBeNull()
-  })
-
-  it('offers previous/next while a playlist plays and reports the end of a track', async () => {
-    stubMedia()
-    const onPrevious = vi.fn()
-    const onNext = vi.fn()
-    const onEnded = vi.fn()
-    const { container } = render(Player, {
-      props: {
-        track: track(1),
-        onUnauthorized: vi.fn(),
-        onEnded,
-        sequence: { label: 'Mix · 1 of 3', hasPrevious: false, hasNext: true, onPrevious, onNext },
-      },
-    })
-    expect(screen.getByText('Mix · 1 of 3')).toBeTruthy()
-    const prev = screen.getByRole('button', { name: 'Previous track' }) as HTMLButtonElement
-    expect(prev.disabled).toBe(true)
-    await fireEvent.click(screen.getByRole('button', { name: 'Next track' }))
-    expect(onNext).toHaveBeenCalledTimes(1)
-    expect(onPrevious).not.toHaveBeenCalled()
-
-    audioOf(container).dispatchEvent(new Event('ended'))
-    expect(onEnded).toHaveBeenCalledTimes(1)
+    await fireEvent.click(within(bar).getByRole('button', { name: 'Queue' }))
+    expect(ui.queueOpen).toBe(true)
   })
 })
 
 describe('Player: Now Playing screen', () => {
-  const open = () => screen.getByRole('button', { name: /^Open Now Playing/ })
-  const dialog = (name = 'Song 1') => screen.getByRole('dialog', { name })
-
-  it('opens from the mini player without touching playback', async () => {
-    const media = stubMedia()
-    const onExpandedChange = vi.fn()
-    const { container } = render(Player, { props: { track: track(1), onUnauthorized: vi.fn(), onExpandedChange } })
-    await screen.findByRole('button', { name: 'Pause' })
-    const audio = audioOf(container)
-    const src = audio.getAttribute('src')
-    const loads = media.load.mock.calls.length
-
-    expect(open().getAttribute('aria-expanded')).toBe('false')
-    await fireEvent.click(open())
-    const d = dialog()
-    expect(d.getAttribute('aria-modal')).toBe('true')
-    expect(within(d).getByRole('heading', { name: 'Song 1' })).toBeTruthy()
-    expect(within(d).getByText('Band')).toBeTruthy()
-    expect(within(d).getByText('Record')).toBeTruthy()
-    expect(within(d).getByText('Now playing')).toBeTruthy()
-    // Still one element, same source, not paused or reloaded.
-    expect(audioOf(container)).toBe(audio)
-    expect(audio.getAttribute('src')).toBe(src)
-    expect(media.pause).not.toHaveBeenCalled()
-    expect(media.load.mock.calls.length).toBe(loads)
-    expect(onExpandedChange).toHaveBeenLastCalledWith(true)
-    expect(document.documentElement.classList.contains('rw-no-scroll')).toBe(true)
-    expect((container.querySelector('section.playbar') as HTMLElement).inert).toBe(true)
-    await vi.waitFor(() => expect(document.activeElement).toBe(within(d).getByRole('button', { name: 'Close Now Playing' })))
+  it('opens from the mini player without touching playback, and closes with Escape', async () => {
+    await start()
+    const before = { play: media.play.mock.calls.length, pause: media.pause.mock.calls.length, load: media.load.mock.calls.length }
+    const open = screen.getByRole('button', { name: 'Open Now Playing: Song 1' })
+    await fireEvent.click(open)
+    const dialog = screen.getByRole('dialog', { name: 'Song 1' })
+    expect(within(dialog).getByRole('link', { name: 'Band' }).getAttribute('href')).toBe(`#/artists/${btoa('band')}`)
+    expect(document.activeElement).toBe(within(dialog).getByRole('button', { name: 'Close Now Playing' }))
+    expect(dialog.querySelector('img')?.getAttribute('src')).toBe('/api/tracks/1/artwork?size=large')
+    await fireEvent.keyDown(dialog, { key: 'Escape' })
+    expect(screen.queryByRole('dialog')).toBeNull()
+    await vi.waitFor(() => expect(document.activeElement).toBe(open))
+    expect({ play: media.play.mock.calls.length, pause: media.pause.mock.calls.length, load: media.load.mock.calls.length }).toEqual(before)
+    expect(player.playing).toBe(true)
   })
 
-  it('shows the same position and play state as the mini player, and controls the same element', async () => {
-    const media = stubMedia()
-    const { container } = render(Player, { props: { track: track(1), onUnauthorized: vi.fn() } })
-    const audio = audioOf(container)
-    const state = controllable(audio)
-    await screen.findByRole('button', { name: 'Pause' })
-    state.currentTime = 62
-    await fireEvent(audio, new Event('timeupdate'))
-    await fireEvent.click(open())
-    const d = dialog()
-    expect(within(d).getByLabelText('Elapsed time').textContent).toBe('1:02')
-    expect(within(d).getByLabelText('Duration').textContent).toBe('3:20')
-
-    await fireEvent.input(within(d).getByLabelText('Seek'), { target: { value: '150' } })
-    expect(state.currentTime).toBe(150)
-    expect(within(d).getByLabelText('Elapsed time').textContent).toBe('2:30')
-
-    await fireEvent.click(within(d).getByRole('button', { name: 'Pause' }))
-    expect(media.pause).toHaveBeenCalledTimes(1)
-    expect(within(d).getByRole('button', { name: 'Play' })).toBeTruthy()
-
-    // Collapsing keeps everything: the mini player shows the new position and state.
-    await fireEvent.click(within(d).getByRole('button', { name: 'Close Now Playing' }))
-    expect(screen.queryByRole('dialog')).toBeNull()
-    const bar = container.querySelector('section.playbar') as HTMLElement
-    expect(within(bar).getByLabelText('Elapsed time').textContent).toBe('2:30')
-    expect(within(bar).getByRole('button', { name: 'Play' })).toBeTruthy()
-    expect(state.currentTime).toBe(150)
-    expect(media.pause).toHaveBeenCalledTimes(1)
-  })
-
-  it('closes with Escape, returning focus to the mini player', async () => {
-    stubMedia()
-    const onExpandedChange = vi.fn()
-    const { container } = render(Player, { props: { track: track(1), onUnauthorized: vi.fn(), onExpandedChange } })
-    await fireEvent.click(open())
-    await fireEvent.keyDown(dialog(), { key: 'Escape' })
-    expect(screen.queryByRole('dialog')).toBeNull()
-    await vi.waitFor(() => expect(document.activeElement).toBe(open()))
-    expect(onExpandedChange).toHaveBeenLastCalledWith(false)
-    expect(document.documentElement.classList.contains('rw-no-scroll')).toBe(false)
-    expect((container.querySelector('section.playbar') as HTMLElement).inert).toBe(false)
+  it('shows the same state as the mini player and controls the same player', async () => {
+    await start()
+    await fireEvent.click(screen.getByRole('button', { name: 'Open Now Playing: Song 1' }))
+    const dialog = screen.getByRole('dialog')
+    expect(within(dialog).getByText('Record · 1 of 3')).toBeTruthy()
+    expect(within(dialog).getByLabelText('Remaining time').textContent).toBe('-3:20')
+    await fireEvent.click(within(dialog).getByRole('button', { name: 'Next track' }))
+    expect(within(dialog).getByRole('heading', { name: 'Song 2' })).toBeTruthy()
+    await fireEvent.change(within(dialog).getByRole('combobox'), { target: { value: '1.5' } })
+    expect(player.speed).toBe(1.5)
+    expect(audio().playbackRate).toBe(1.5)
+    await fireEvent.click(within(dialog).getByRole('button', { name: '+10s' }))
+    expect(player.position).toBe(10)
   })
 
   it('keeps keyboard focus inside while open', async () => {
-    stubMedia()
-    render(Player, { props: { track: track(1), onUnauthorized: vi.fn() } })
-    await fireEvent.click(open())
-    const d = dialog()
-    const close = within(d).getByRole('button', { name: 'Close Now Playing' })
-    const play = within(d).getByRole('button', { name: /^(Play|Pause)$/ })
-    play.focus()
-    await fireEvent.keyDown(d, { key: 'Tab' })
-    expect(document.activeElement).toBe(close)
-    await fireEvent.keyDown(d, { key: 'Tab', shiftKey: true })
-    expect(document.activeElement).toBe(play)
+    await start()
+    await fireEvent.click(screen.getByRole('button', { name: 'Open Now Playing: Song 1' }))
+    const dialog = screen.getByRole('dialog')
+    const close = within(dialog).getByRole('button', { name: 'Close Now Playing' })
+    close.focus()
+    await fireEvent.keyDown(dialog, { key: 'Tab', shiftKey: true })
+    expect(document.activeElement).not.toBe(close)
+    expect(dialog.contains(document.activeElement)).toBe(true)
   })
 
-  it('offers previous and next only while a playlist plays', async () => {
-    stubMedia()
-    const onNext = vi.fn()
-    const p = { track: track(1), onUnauthorized: vi.fn() }
-    const { rerender } = render(Player, { props: p })
-    await fireEvent.click(open())
-    expect(within(dialog()).queryByRole('button', { name: 'Previous track' })).toBeNull()
-    expect(within(dialog()).queryByRole('button', { name: 'Next track' })).toBeNull()
-
-    await rerender({ ...p, sequence: { label: 'Mix · 1 of 3', hasPrevious: false, hasNext: true, onPrevious: vi.fn(), onNext } })
-    const d = dialog()
-    expect((within(d).getByRole('button', { name: 'Previous track' }) as HTMLButtonElement).disabled).toBe(true)
-    await fireEvent.click(within(d).getByRole('button', { name: 'Next track' }))
-    expect(onNext).toHaveBeenCalledTimes(1)
-    expect(within(d).getByText('Mix · 1 of 3')).toBeTruthy()
+  it('loads lyrics on request', async () => {
+    mockFetch({
+      'PUT /api/playback': () => json(200, {}),
+      'GET /api/tracks/1': () => json(200, { track: { ...track(1), has_lyrics: true, lyrics: 'first line\nsecond line' } }),
+    })
+    await start([track(1, { has_lyrics: true })])
+    await fireEvent.click(screen.getByRole('button', { name: 'Open Now Playing: Song 1' }))
+    await fireEvent.click(screen.getByRole('button', { name: 'Lyrics' }))
+    expect(await screen.findByText(/first line\s+second line/)).toBeTruthy()
   })
 
-  it('follows a track change while open, and closes when the track is cleared', async () => {
-    stubMedia()
-    const p = { track: track(1), onUnauthorized: vi.fn() }
-    const { rerender } = render(Player, { props: p })
-    await fireEvent.click(open())
-    await rerender({ ...p, track: track(2, { artist: undefined, album: undefined }) })
-    expect(within(dialog('Song 2')).getByText('Unknown artist')).toBeTruthy()
-    await rerender({ ...p, track: null })
-    expect(screen.queryByRole('dialog')).toBeNull()
-    expect(document.documentElement.classList.contains('rw-no-scroll')).toBe(false)
+  it('closes when the queue is cleared', async () => {
+    await start()
+    await fireEvent.click(screen.getByRole('button', { name: 'Open Now Playing: Song 1' }))
+    player.clear()
+    await vi.waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
   })
 
   it('opens when the track info is pulled up, and closes when the header is pulled down', async () => {
-    stubMedia()
-    render(Player, { props: { track: track(1), onUnauthorized: vi.fn() } })
-    await fireEvent.pointerDown(open(), { clientY: 300 })
-    await fireEvent.pointerUp(open(), { clientY: 200 })
-    expect(dialog()).toBeTruthy()
-    // A short movement does not close it, and a pull that starts outside the
-    // header (for example on the seek bar) is ignored.
-    const head = dialog().querySelector('.screen-head') as HTMLElement
-    await fireEvent.pointerDown(head, { clientY: 100 })
-    await fireEvent.pointerUp(head, { clientY: 110 })
-    const seekBar = within(dialog()).getByLabelText('Seek')
-    await fireEvent.pointerDown(seekBar, { clientY: 100 })
-    await fireEvent.pointerUp(seekBar, { clientY: 300 })
-    expect(screen.queryByRole('dialog')).not.toBeNull()
+    await start()
+    const open = screen.getByRole('button', { name: 'Open Now Playing: Song 1' })
+    await fireEvent.pointerDown(open, { clientY: 500 })
+    await fireEvent.pointerUp(open, { clientY: 400 })
+    const dialog = screen.getByRole('dialog')
+    const head = dialog.querySelector('.screen-head') as HTMLElement
     await fireEvent.pointerDown(head, { clientY: 100 })
     await fireEvent.pointerUp(head, { clientY: 200 })
     expect(screen.queryByRole('dialog')).toBeNull()

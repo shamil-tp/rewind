@@ -51,6 +51,10 @@ type Playlist struct {
 	DurationMS       int64     `json:"duration_ms"` // sum of known durations
 	CreatedAt        time.Time `json:"created_at"`
 	UpdatedAt        time.Time `json:"updated_at"`
+	// ArtworkTrackID is the track whose artwork represents the playlist: the
+	// chosen one (ArtworkChosen) or else the first track; nil when empty.
+	ArtworkTrackID *int64 `json:"artwork_track_id,omitempty"`
+	ArtworkChosen  bool   `json:"artwork_chosen"`
 }
 
 // PlaylistEntry is one track of a playlist. Position is 1-based and
@@ -119,7 +123,10 @@ func NormalizePlaylistDescription(desc string) (string, error) {
 const playlistSummary = `SELECT p.id, p.name, p.description, p.created_at, p.updated_at,
 	count(pt.track_id),
 	coalesce(sum(NOT ` + trackAvailable + `), 0),
-	coalesce(sum(t.duration_ms), 0)
+	coalesce(sum(t.duration_ms), 0),
+	coalesce(p.artwork_track_id, (SELECT pt2.track_id FROM playlist_tracks pt2 WHERE pt2.playlist_id = p.id
+		ORDER BY pt2.position LIMIT 1)),
+	p.artwork_track_id IS NOT NULL
 	FROM playlists p
 	LEFT JOIN playlist_tracks pt ON pt.playlist_id = p.id
 	LEFT JOIN tracks t ON t.id = pt.track_id
@@ -130,10 +137,13 @@ func scanPlaylist(row rowScanner) (Playlist, error) {
 		pl               Playlist
 		desc             sql.NullString
 		created, updated int64
+		artwork          sql.NullInt64
 	)
-	if err := row.Scan(&pl.ID, &pl.Name, &desc, &created, &updated, &pl.TrackCount, &pl.UnavailableCount, &pl.DurationMS); err != nil {
+	if err := row.Scan(&pl.ID, &pl.Name, &desc, &created, &updated, &pl.TrackCount, &pl.UnavailableCount, &pl.DurationMS,
+		&artwork, &pl.ArtworkChosen); err != nil {
 		return Playlist{}, err
 	}
+	pl.ArtworkTrackID = intp(artwork)
 	pl.Description = strp(desc)
 	pl.CreatedAt = time.Unix(created, 0).UTC()
 	pl.UpdatedAt = time.Unix(updated, 0).UTC()
@@ -456,3 +466,153 @@ func touch(ctx context.Context, tx *sql.Tx, id, now int64) error {
 }
 
 func nullString(s string) sql.NullString { return sql.NullString{String: s, Valid: s != ""} }
+
+// MaxAddTracks bounds one AddTracks request.
+const MaxAddTracks = MaxPlaylistTracks
+
+// AddTracks appends several tracks to a playlist in one transaction, in the
+// given order. Tracks already in the playlist (or listed twice) are skipped
+// and counted in skipped. Every ID must be an indexed track; otherwise
+// ErrTrackNotFound is returned and nothing is added.
+func (s *Playlists) AddTracks(ctx context.Context, userID, playlistID int64, trackIDs []int64) (added, skipped int, err error) {
+	err = s.inTx(ctx, func(tx *sql.Tx) error {
+		if err := owned(ctx, tx, userID, playlistID); err != nil {
+			return err
+		}
+		present := map[int64]bool{}
+		rows, err := tx.QueryContext(ctx, "SELECT track_id FROM playlist_tracks WHERE playlist_id = ?", playlistID)
+		if err != nil {
+			return err
+		}
+		for rows.Next() {
+			var id int64
+			if err := rows.Scan(&id); err != nil {
+				rows.Close()
+				return err
+			}
+			present[id] = true
+		}
+		rows.Close()
+		if err := rows.Err(); err != nil {
+			return err
+		}
+		var next int64
+		if err := tx.QueryRowContext(ctx, "SELECT coalesce(max(position) + 1, 0) FROM playlist_tracks WHERE playlist_id = ?",
+			playlistID).Scan(&next); err != nil {
+			return err
+		}
+		now := s.now().Unix()
+		for _, id := range trackIDs {
+			if present[id] {
+				skipped++
+				continue
+			}
+			if err := trackExists(ctx, tx, id); err != nil {
+				return err
+			}
+			if len(present) >= MaxPlaylistTracks {
+				return ErrPlaylistFull
+			}
+			if _, err := tx.ExecContext(ctx, "INSERT INTO playlist_tracks (playlist_id, track_id, position, added_at) VALUES (?, ?, ?, ?)",
+				playlistID, id, next, now); err != nil {
+				return err
+			}
+			present[id] = true
+			next++
+			added++
+		}
+		if added == 0 {
+			return nil
+		}
+		return touch(ctx, tx, playlistID, now)
+	})
+	if err != nil {
+		return 0, 0, err
+	}
+	return added, skipped, nil
+}
+
+// Duplicate copies a playlist (name, description, artwork choice and tracks
+// in order) under a free name such as "Road trip (copy)".
+func (s *Playlists) Duplicate(ctx context.Context, userID, id int64) (Playlist, error) {
+	var pl Playlist
+	err := s.inTx(ctx, func(tx *sql.Tx) error {
+		var name string
+		var desc sql.NullString
+		var artwork sql.NullInt64
+		err := tx.QueryRowContext(ctx, "SELECT name, description, artwork_track_id FROM playlists WHERE id = ? AND user_id = ?",
+			id, userID).Scan(&name, &desc, &artwork)
+		if errors.Is(err, sql.ErrNoRows) {
+			return ErrPlaylistNotFound
+		}
+		if err != nil {
+			return err
+		}
+		var n int
+		if err := tx.QueryRowContext(ctx, "SELECT count(*) FROM playlists WHERE user_id = ?", userID).Scan(&n); err != nil {
+			return err
+		}
+		if n >= MaxPlaylistsPerUser {
+			return ErrTooManyPlaylists
+		}
+		copyName := ""
+		for i := 1; i <= 1000 && copyName == ""; i++ {
+			suffix := " (copy)"
+			if i > 1 {
+				suffix = fmt.Sprintf(" (copy %d)", i)
+			}
+			base := []rune(name)
+			if max := MaxPlaylistNameRunes - utf8.RuneCountInString(suffix); len(base) > max {
+				base = base[:max]
+			}
+			candidate := strings.TrimSpace(string(base)) + suffix
+			if nameFree(ctx, tx, userID, candidate, 0) == nil {
+				copyName = candidate
+			}
+		}
+		if copyName == "" {
+			return ErrPlaylistNameTaken
+		}
+		now := s.now().Unix()
+		res, err := tx.ExecContext(ctx, `INSERT INTO playlists (user_id, name, description, created_at, updated_at, artwork_track_id)
+			VALUES (?, ?, ?, ?, ?, ?)`, userID, copyName, desc, now, now, artwork)
+		if err != nil {
+			return err
+		}
+		newID, err := res.LastInsertId()
+		if err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, `INSERT INTO playlist_tracks (playlist_id, track_id, position, added_at)
+			SELECT ?, track_id, position, ? FROM playlist_tracks WHERE playlist_id = ?`, newID, now, id); err != nil {
+			return err
+		}
+		pl, err = summary(ctx, tx, userID, newID)
+		return err
+	})
+	return pl, err
+}
+
+// SetArtwork chooses the track whose artwork represents the playlist; nil
+// returns to the first track's.
+func (s *Playlists) SetArtwork(ctx context.Context, userID, id int64, trackID *int64) (Playlist, error) {
+	var pl Playlist
+	err := s.inTx(ctx, func(tx *sql.Tx) error {
+		if err := owned(ctx, tx, userID, id); err != nil {
+			return err
+		}
+		if trackID != nil {
+			if err := trackExists(ctx, tx, *trackID); err != nil {
+				return err
+			}
+		}
+		now := s.now().Unix()
+		if _, err := tx.ExecContext(ctx, "UPDATE playlists SET artwork_track_id = ?, updated_at = ? WHERE id = ?", trackID, now, id); err != nil {
+			return err
+		}
+		var err error
+		pl, err = summary(ctx, tx, userID, id)
+		return err
+	})
+	return pl, err
+}

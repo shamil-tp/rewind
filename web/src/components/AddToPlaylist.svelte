@@ -1,17 +1,25 @@
 <script lang="ts">
   import { onMount, tick } from 'svelte'
-  import { addToPlaylist, ApiError, listPlaylists, type Playlist, type Track } from '../services/api'
+  import { addToPlaylist, addTracksToPlaylist, ApiError, listPlaylists, type Playlist, type Track } from '../services/api'
   import { sentence } from '../services/validation'
 
   interface Props {
     track: Track
+    /** Several tracks to add at once (album, artist, playlist, selection); track names the group. */
+    tracks?: Track[]
+    /** A playlist not to offer (the one the tracks come from). */
+    exclude?: number
+    /** Names the group of tracks in labels, e.g. "Album title". */
+    name?: string
     /** Called with a confirmation message after the track was added. */
     onDone: (message: string) => void
     onCancel: () => void
     onUnauthorized: () => void
   }
-  let { track, onDone, onCancel, onUnauthorized }: Props = $props()
+  let { track, tracks, exclude, name, onDone, onCancel, onUnauthorized }: Props = $props()
 
+  // Unique per panel, so several panels never share an input ID.
+  const uid = `${Math.random().toString(36).slice(2, 9)}`
   let playlists = $state<Playlist[] | null>(null)
   let choice = $state<number | null>(null)
   let loadError = $state('')
@@ -28,7 +36,7 @@
     loadError = ''
     playlists = null
     try {
-      playlists = await listPlaylists()
+      playlists = (await listPlaylists()).filter((p) => p.id !== exclude)
       choice = playlists[0]?.id ?? null
       await tick()
       ;(select ?? root?.querySelector<HTMLElement>('a, button'))?.focus()
@@ -48,8 +56,14 @@
     busy = true
     error = ''
     try {
-      await addToPlaylist(target.id, track.id)
-      onDone(`Added “${track.title}” to “${target.name}”.`)
+      if (tracks) {
+        const res = await addTracksToPlaylist(target.id, tracks.map((t) => t.id))
+        const already = res.skipped > 0 ? ` (${res.skipped} already there)` : ''
+        onDone(`Added ${res.added} ${res.added === 1 ? 'track' : 'tracks'} to “${target.name}”${already}.`)
+      } else {
+        await addToPlaylist(target.id, track.id)
+        onDone(`Added “${track.title}” to “${target.name}”.`)
+      }
     } catch (err) {
       if (err instanceof ApiError && err.status === 401) {
         onUnauthorized()
@@ -74,7 +88,7 @@
 </script>
 
 <!-- svelte-ignore a11y_no_noninteractive_element_interactions (Escape closes the panel) -->
-<div class="panel" role="group" aria-label={`Add ${track.title} to a playlist`} bind:this={root} onkeydown={onKeydown}>
+<div class="panel" role="group" aria-label={`Add ${name ?? track.title} to a playlist`} bind:this={root} onkeydown={onKeydown}>
   {#if loadError}
     <p class="rw-alert" role="alert">{loadError}</p>
     <div class="actions">
@@ -90,9 +104,9 @@
     </div>
   {:else}
     <form class="form" onsubmit={add}>
-      <label class="rw-label" for={`add-${track.id}`}>Add to playlist</label>
+      <label class="rw-label" for={`add-${uid}`}>Add to playlist</label>
       <div class="actions">
-        <select id={`add-${track.id}`} class="rw-input" bind:value={choice} bind:this={select} disabled={busy}>
+        <select id={`add-${uid}`} class="rw-input" bind:value={choice} bind:this={select} disabled={busy}>
           {#each playlists as p (p.id)}
             <option value={p.id}>{p.name} ({p.track_count})</option>
           {/each}

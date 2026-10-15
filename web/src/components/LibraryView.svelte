@@ -4,19 +4,19 @@
   import { formatTime } from '../services/format'
   import { LIBRARY_SORTS as sorts } from '../services/librarySort'
   import { sentence } from '../services/validation'
-  import AddToPlaylist from './AddToPlaylist.svelte'
+  import { listening } from '../services/listening.svelte'
+  import { player } from '../services/player.svelte'
+  import Icon from './Icon.svelte'
+  import TrackMenu from './TrackMenu.svelte'
 
   interface Props {
-    currentId: number | null
-    playing: boolean
     /** Incremented by the parent when the library changed (e.g. after a scan). */
     reloadKey: number
     /** The saved default sort. The menu starts here and follows changes to it. */
     defaultSort: LibrarySortChoice
-    onSelect: (track: Track) => void
     onUnauthorized: () => void
   }
-  let { currentId, playing, reloadKey, defaultSort, onSelect, onUnauthorized }: Props = $props()
+  let { reloadKey, defaultSort, onUnauthorized }: Props = $props()
 
   const pageSize = 50
   const searchDelay = 300
@@ -29,9 +29,9 @@
   // Only the initial value; the effect below follows later changes.
   // svelte-ignore state_referenced_locally
   let sortChoice = $state<LibrarySortChoice>(defaultSort)
-  // The track whose "add to playlist" panel is open, and the last result.
-  let addingId = $state<number | null>(null)
-  let addedMessage = $state('')
+  // The row whose menu is open (also from a right-click).
+  let menuFor = $state<number | null>(null)
+  let favError = $state('')
   let loading = $state(false)
   let error = $state('')
   let loaded = $state(false)
@@ -108,14 +108,20 @@
     lastDefaultSort = next
   })
 
-  function toggleAdd(id: number) {
-    addedMessage = ''
-    addingId = addingId === id ? null : id
+  /** Plays the loaded list (the search results, if any) from this track. */
+  function play(index: number) {
+    if (!items[index]?.available) return
+    player.playTracks(items, index, { kind: 'library', name: activeQuery ? `Search: ${activeQuery}` : 'Library' })
   }
 
-  function added(message: string) {
-    addingId = null
-    addedMessage = message
+  async function toggleFavorite(t: Track) {
+    favError = ''
+    try {
+      await listening.toggleFavorite(t)
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 401) onUnauthorized()
+      else favError = err instanceof Error ? sentence(err.message) : 'Could not change the favorite.'
+    }
   }
 
   let lastReloadKey: number | undefined
@@ -153,7 +159,7 @@
       <p class="count" aria-live="polite">{countText}</p>
     {/if}
   </header>
-  <p class="added" role="status">{addedMessage}</p>
+  {#if favError}<p class="rw-alert" role="alert">{favError}</p>{/if}
 
   <div class="tools">
     <form class="search" role="search" onsubmit={onSubmit}>
@@ -208,42 +214,58 @@
       <span>Title</span><span>Artist</span><span>Album</span><span class="len">Time</span>
     </div>
     <ol class="tracks" aria-label="Tracks" aria-busy={loading}>
-      {#each items as track (track.id)}
-        {@const isCurrent = track.id === currentId}
-        <li class="item">
+      {#each items as track, i (track.id)}
+        {@const isCurrent = player.isCurrentTrack(track.id)}
+        <li
+          class="item"
+          oncontextmenu={(e) => {
+            e.preventDefault()
+            menuFor = i
+          }}
+        >
           <button
             class="row"
             class:current={isCurrent}
             type="button"
-            onclick={() => track.available && onSelect(track)}
+            onclick={() => play(i)}
+            onkeydown={(e) => {
+              if ((e.key === 'F10' && e.shiftKey) || e.key === 'ContextMenu') {
+                e.preventDefault()
+                menuFor = i
+              }
+            }}
             disabled={!track.available}
             aria-current={isCurrent ? 'true' : undefined}
             aria-label={trackLabel(track)}
           >
             <span class="cell title">
-              {#if isCurrent}<span class="marker">{playing ? 'Playing' : 'Paused'}</span>{/if}
-              <span class="title-text">{track.title}</span>
+              {#if isCurrent}<span class="marker">{player.playing ? 'Playing' : 'Paused'}</span>{/if}
+              <span class="title-text" title={track.title}>{track.title}</span>
             </span>
             <span class="cell artist" class:unknown={!track.artist}>{track.artist ?? '—'}</span>
             <span class="cell album" class:unknown={!track.album}>{track.album ?? '—'}</span>
             <span class="cell len">
-              {#if !track.available}<span class="badge">Unavailable</span>{/if}
+              {#if track.status === 'missing'}<span class="badge">File missing</span>
+              {:else if !track.available}<span class="badge">Unavailable</span>{/if}
               {formatTime(track.duration_ms ? track.duration_ms / 1000 : undefined)}
             </span>
           </button>
           <button
-            class="add"
+            class="fav"
             type="button"
-            onclick={() => toggleAdd(track.id)}
-            aria-expanded={addingId === track.id}
-            aria-label={`Add ${track.title} to a playlist`}
-            title="Add to playlist">+</button
+            onclick={() => toggleFavorite(track)}
+            aria-pressed={listening.isFavorite(track)}
+            aria-label={`Favorite: ${track.title}`}
+            title={listening.isFavorite(track) ? 'Remove from favorites' : 'Add to favorites'}
           >
-          {#if addingId === track.id}
-            <div class="add-panel">
-              <AddToPlaylist {track} onDone={added} onCancel={() => (addingId = null)} {onUnauthorized} />
-            </div>
-          {/if}
+            <Icon name={listening.isFavorite(track) ? 'heartFilled' : 'heart'} />
+          </button>
+          <TrackMenu
+            {track}
+            context={{ kind: 'library', name: activeQuery ? `Search: ${activeQuery}` : 'Library' }}
+            {onUnauthorized}
+            bind:open={() => menuFor === i, (v) => (menuFor = v ? i : menuFor === i ? null : menuFor)}
+          />
         </li>
       {/each}
     </ol>
@@ -304,8 +326,8 @@
   }
 
   .columns {
-    /* Right padding lines the Time column up with rows that have an add button. */
-    padding: 0 calc(var(--rw-space-3) + 2.75rem) var(--rw-space-2) var(--rw-space-3);
+    /* Right padding lines the Time column up with the rows' two buttons. */
+    padding: 0 calc(var(--rw-space-3) + 5.5rem) var(--rw-space-2) var(--rw-space-3);
     border-bottom: var(--rw-border);
     color: var(--rw-color-muted);
     font-family: var(--rw-font-mono);
@@ -322,48 +344,28 @@
 
   .item {
     display: grid;
-    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-columns: minmax(0, 1fr) auto auto;
+    align-items: center;
     border-bottom: 1px solid var(--rw-color-surface);
   }
 
-  /* The add button is a 44px-wide touch target beside each row. */
-  .add {
-    min-width: 2.75rem;
+  /* Favorite and menu: 44px touch targets beside each row. */
+  .fav {
+    display: grid;
+    place-items: center;
+    width: 2.75rem;
     border: 0;
-    border-left: 1px solid var(--rw-color-surface);
     background: transparent;
     color: var(--rw-color-muted);
-    font-family: var(--rw-font-mono);
-    font-size: 1.25rem;
-    font-weight: var(--rw-font-weight-bold);
     cursor: pointer;
   }
 
-  .add:hover,
-  .add[aria-expanded='true'] {
-    background: var(--rw-color-surface);
-    color: var(--rw-color-primary);
+  .fav[aria-pressed='true'] {
+    color: var(--rw-color-accent);
   }
 
-  .add:focus-visible {
+  .fav:focus-visible {
     outline-offset: -3px;
-  }
-
-  .add-panel {
-    grid-column: 1 / -1;
-    margin-bottom: var(--rw-space-2);
-    padding: var(--rw-space-3);
-    border-left: var(--rw-border-width) solid var(--rw-color-accent);
-    border-radius: var(--rw-radius-md);
-    background: var(--rw-color-surface);
-  }
-
-  .added {
-    min-height: 1.25em;
-    margin-bottom: var(--rw-space-2);
-    color: var(--rw-color-muted);
-    font-family: var(--rw-font-mono);
-    font-size: var(--rw-font-size-sm);
   }
 
   .row {

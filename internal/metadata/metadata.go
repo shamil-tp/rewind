@@ -45,6 +45,14 @@ func FormatOf(name string) string {
 // maxFieldRunes caps stored tag values; longer values are truncated.
 const maxFieldRunes = 512
 
+// MaxLyricsRunes caps stored lyrics, which keep their line breaks.
+const MaxLyricsRunes = 20000
+
+// Version identifies what Extract reads. The scanner re-reads files indexed
+// by an older version once, even if they did not change. Version 1 added
+// Composer and Lyrics.
+const Version = 1
+
 // Status says how much metadata could be read.
 type Status string
 
@@ -67,6 +75,8 @@ type Metadata struct {
 	Album       string
 	AlbumArtist string
 	Genre       string
+	Composer    string
+	Lyrics      string // line breaks kept as LF
 	Date        string // raw date tag, e.g. "1999" or "1999-05-01"
 	Year        *int
 	TrackNumber *int
@@ -157,6 +167,8 @@ func Extract(filePath string) Metadata {
 		m.Album = field(tags, taglib.Album)
 		m.AlbumArtist = field(tags, taglib.AlbumArtist)
 		m.Genre = field(tags, taglib.Genre)
+		m.Composer = field(tags, taglib.Composer)
+		m.Lyrics = lyrics(tags)
 		m.Date = firstValue(tags, taglib.Date)
 		m.Year = parseYear(m.Date)
 		m.TrackNumber = parseIndex(firstValue(tags, taglib.TrackNumber))
@@ -223,6 +235,38 @@ func field(tags map[string][]string, key string) string {
 	return truncate(strings.Join(out, "; "), maxFieldRunes)
 }
 
+// lyrics returns the first non-empty lyrics value with its line breaks.
+func lyrics(tags map[string][]string) string {
+	for _, key := range []string{taglib.Lyrics, "UNSYNCEDLYRICS"} {
+		for _, v := range tags[key] {
+			if v = CleanMultiline(v); v != "" {
+				return truncate(v, MaxLyricsRunes)
+			}
+		}
+	}
+	return ""
+}
+
+// CleanMultiline is clean for text that keeps line breaks (lyrics): CR LF and
+// CR become LF, other control characters are removed.
+func CleanMultiline(s string) string {
+	s = strings.ToValidUTF8(s, "�")
+	s = strings.ReplaceAll(strings.ReplaceAll(s, "\r\n", "\n"), "\r", "\n")
+	s = strings.Map(func(r rune) rune {
+		if (r < 0x20 && r != '\n') || r == 0x7F {
+			if r == '\t' {
+				return ' '
+			}
+			return -1
+		}
+		return r
+	}, s)
+	return strings.TrimSpace(s)
+}
+
+// Clean makes a single-line value safe to store (see clean).
+func Clean(s string) string { return clean(s) }
+
 func firstValue(tags map[string][]string, key string) string {
 	for _, v := range tags[key] {
 		if v = clean(v); v != "" {
@@ -281,4 +325,20 @@ func truncate(s string, max int) string {
 // String is used in logs.
 func (m Metadata) String() string {
 	return fmt.Sprintf("%s (%s, %s)", m.Title, m.Format, m.Status)
+}
+
+// MaxArtworkBytes bounds embedded images Rewind accepts.
+const MaxArtworkBytes = 16 << 20
+
+// ReadArtwork returns the first embedded image of the file at path, or nil
+// if it has none (or only an oversized one). Like Extract it is read-only.
+func ReadArtwork(filePath string) ([]byte, error) {
+	img, err := taglib.ReadImage(filePath)
+	if err != nil {
+		return nil, err
+	}
+	if len(img) == 0 || len(img) > MaxArtworkBytes {
+		return nil, nil
+	}
+	return img, nil
 }
